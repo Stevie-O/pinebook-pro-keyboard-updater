@@ -1,6 +1,18 @@
 CSEG AT 0000h
+
+; ====================================
+
+; System Reset
+
+RESET_VEC:
   0000 023800		LJMP L0001
 
+
+; ====================================
+
+; P4.6 Falling Edge
+
+EXT0_IRQVEC:
   0003 020026		LJMP L0610
 
 L0642:
@@ -10,6 +22,12 @@ L0642:
 L0611:
   000A 32    		RETI
 
+
+; ====================================
+
+; Base Timer0 Interrupt
+
+T0_IRQVEC:
   000B 02000A		LJMP L0611
 
 L0658:
@@ -17,6 +35,12 @@ L0658:
   0011 32    		RETI
 
 CSEG AT 0013h
+
+; ====================================
+
+; Reserved
+
+RESERVED_VEC_0013:
   0013 02002E		LJMP L0612
 
 L0672:
@@ -24,6 +48,12 @@ L0672:
   0019 32    		RETI
 
 CSEG AT 001Bh
+
+; ====================================
+
+; Base Timer1 Interrupt
+
+T1_IRQVEC:
   001B 0224B4		LJMP L0613
 
 L0861:
@@ -31,6 +61,12 @@ L0861:
 
   0021 22    		DB 022h ; '"'
 CSEG AT 0023h
+
+; ====================================
+
+; Time Capture0 Interrupt
+
+TC0_IRQVEC:
   0023 020046		LJMP L0622
 
 L0610:
@@ -38,6 +74,12 @@ L0610:
   0028 32    		RETI
 
 CSEG AT 002Bh
+
+; ====================================
+
+; Reserved
+
+RESERVED_VEC_002B:
   002B 02004E		LJMP L0623
 
 L0612:
@@ -45,6 +87,12 @@ L0612:
   0030 32    		RETI
 
 CSEG AT 0033h
+
+; ====================================
+
+; Reserved
+
+RESERVED_VEC_0033:
   0033 020056		LJMP L0624
 
 L0220:
@@ -62,6 +110,12 @@ L0220:
   0041 00    		NOP
   0042 22    		RET
 
+
+; ====================================
+
+; SETUP Token Interrupt
+
+STUP_IRQVEC:
   0043 0224CF		LJMP L0625
 
 L0622:
@@ -69,6 +123,12 @@ L0622:
   0048 32    		RETI
 
 CSEG AT 004Bh
+
+; ====================================
+
+; OWSTUP_Interrupt
+
+OWSTUP_IRQVEC_004B:
   004B 0224EA		LJMP L0641
 
 L0623:
@@ -76,6 +136,12 @@ L0623:
   0050 32    		RETI
 
 CSEG AT 0053h
+
+; ====================================
+
+; OT0ERR_Interrupt
+
+OT0ERR_IRQVEC_0053:
   0053 020006		LJMP L0642
 
 L0624:
@@ -83,6 +149,12 @@ L0624:
   0058 32    		RETI
 
 CSEG AT 005Bh
+
+; ====================================
+
+; IN0 Token Interrupt
+
+IN0_IRQVEC:
   005B 022505		LJMP L0643
 
 L0483:
@@ -90,19 +162,43 @@ L0483:
   0060 22    		RET
 
 CSEG AT 0063h
+
+; ====================================
+
+; OUT0 Token Interrupt
+
+OUT0_IRQVEC:
   0063 022520		LJMP L0648
 
   0066 0227B6		LJMP L0656
 
 CSEG AT 006Bh
+
+; ====================================
+
+; NAKT0, NAKR0, T0STL, R0STL, NAK1, NAK2, IN1, IN2
+
+SIE_IRQVEC:
   006B 02000E		LJMP L0658
 
   006E 0227B6		LJMP L0656
 
 CSEG AT 0073h
+
+; ====================================
+
+; SUSP/OVL Interrupt
+
+FUN_IRQVEC:
   0073 02253B		LJMP L0659
 
 CSEG AT 007Bh
+
+; ====================================
+
+; Reserved
+
+RESERVED_VEC_007B:
   007B 020016		LJMP L0672
 
   007E 18           DB 018h ; length of string
