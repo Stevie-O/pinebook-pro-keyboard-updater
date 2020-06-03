@@ -1,5 +1,6 @@
 CSEG AT 0000h
 
+
 ; ====================================
 
 ; System Reset
@@ -36,6 +37,7 @@ L0658:
 
 CSEG AT 0013h
 
+
 ; ====================================
 
 ; Reserved
@@ -49,6 +51,7 @@ L0672:
 
 CSEG AT 001Bh
 
+
 ; ====================================
 
 ; Base Timer1 Interrupt
@@ -60,7 +63,9 @@ L0861:
   001E 023F00		LJMP L0865
 
   0021 22    		DB 022h ; '"'
+
 CSEG AT 0023h
+
 
 ; ====================================
 
@@ -226,10 +231,18 @@ RESERVED_VEC_007B:
   0094 48           DB 048h ; 'H'
   0095 00           DB 000h 
   0096 00           DB 000h 
-  0097 04           DB 004h 
-  0098 03           DB 003h 
-  0099 09           DB 009h 
-  009A 04           DB 004h 
+ 
+; this looks like the USB string table
+; string index 0 is the language ID list
+
+  0097 04           DB 004h ; 4 bytes
+  0098 03           DB 003h ; string descriptor
+  0099 09           DB 009h ; 0x0409 = US English
+  009A 04           DB 004h
+
+; other string indices are whatever the mfr chooses
+; based on the USB descriptor, index 1 is mfr name
+
   009B 20           DB 020h ; length of string
   009C 03           DB 003h ; string type
   009D 48           DB 048h ; 'H'
@@ -263,6 +276,9 @@ RESERVED_VEC_007B:
   00B9 44           DB 044h ; 'D'
   00BA 00           DB 000h 
   00BB 00           DB 000h 
+
+; based on the USB descriptor, index 2 is product name
+
   00BC 1A           DB 01Ah ; length of string
   00BD 03           DB 003h ; string type
   00BE 55           DB 055h ; 'U'
@@ -290,6 +306,9 @@ RESERVED_VEC_007B:
   00D4 44           DB 044h ; 'D'
   00D5 00           DB 000h 
   00D6 00           DB 000h 
+  
+; this isn't actually a valid USB string
+
   00D7 58           DB 058h ; 'X' serial number
   00D8 57           DB 057h ; 'W'
   00D9 2D           DB 02Dh ; '-'
@@ -328,8 +347,11 @@ RESERVED_VEC_007B:
   00FA 30           DB 030h ; '0'
   00FB 30           DB 030h ; '0'
   00FC 00           DB 000h 
+
+; device descriptor
+  
   00FD 12           DB 012h ; bLength -- start device descriptor
-  00FE 01           DB 001h ; bDescritorType
+  00FE 01           DB 001h ; bDescriptorType
   00FF 10           DB 010h ; bcdHID
   0100 01           DB 001h ; *
   0101 00           DB 000h ; class
@@ -7308,22 +7330,25 @@ L0113:
 
   37FE 00    		DB 000h 
   37FF 00    		DB 000h 
+  
+;	entry point after CPU reset
+
 L0001:
   3800 75F0A5		MOV B, #0A5h ; B = 0xA5
-  3803 C2AF  		CLR EA ; PRCON = 0x00
+  3803 C2AF  		CLR EA ; Disable interrupts
   3805 759355		MOV 93h, #55h ; CLRWDT = 0x55
   3808 E596  		MOV A, 96h ; A = MODE_FG
   380A 20E162		JB ACC.1, L0002 ; if (POF) L0002
   380D 30E228		JNB ACC.2, L0003 ; if (!USBRST) L0003
   3810 E520  		MOV A, 20h ; A = *20
-  3812 B44123		CJNE A, #41h, L0003 ; if (A != 0x41) L0003
-  3815 B52420		CJNE A, 24h, L0003 ; if (A != *24)
+  3812 B44123		CJNE A, #41h, L0003 ; if (mem[0x20] != 'A') L0003
+  3815 B52420		CJNE A, 24h, L0003 ; if (mem[0x20] != mem[0x24]) L0003
   3818 E521  		MOV A, 21h ; A = *21
-  381A B44B1B		CJNE A, #4Bh, L0003 ; if (A != 0x4B) L0003
+  381A B44B1B		CJNE A, #4Bh, L0003 ; if (mem[0x21] != 'K') L0003
   381D E522  		MOV A, 22h ; A = *22
-  381F B44916		CJNE A, #49h, L0003 ; if (A != 0x49) L0003
+  381F B44916		CJNE A, #49h, L0003 ; if (mem[0x22] != 'I') L0003
   3822 E523  		MOV A, 23h
-  3824 B45211		CJNE A, #52h, L0003
+  3824 B45211		CJNE A, #52h, L0003	; if (mem[0x23] != 'R') L0003
 L0112:
   3827 01D5  		AJMP L0004
 
@@ -7426,43 +7451,91 @@ L0609:
   38CE D2C5  		SETB 0C5h                ; bit.0C5h = P4.5
   38D0 D1C5  		ACALL L0111
   38D2 30C5F5		JNB 0C5h, L0609          ; bit.0C5h = P4.5
+  
+; this routine is reached after CUP reset in the following condition:
+; - Reset was caused by a USB RESET after the device was already powered on and initialized, AND
+; - the string "AKIR" is stored in RAM at 0x20-0x23
+;      OR
+;   the string "KIR" is stored in RAM at 0x21-0x23 and the byte at 0x20 equals the byte at 0x24 (how odd)
+
+; my guess is that this might be to initialize the firmware-load process.
+
+; some more thoughts:
+;	- max RX packet size for endpoint 0 is 8 bytes
+;	- Flash sector size is 1024 bytes (section 11.1, page 45)
+;	  This means that it would require 128 packet transfers to transfer a single sector.
+;	- It looks like all available address space is being used, so there's no "spare" space for the flashing code.
+;	  Other devices I've worked on solved the problem by having the flashing code run from RAM; that's not possible here.
+;     I wonder if the actual firmware-flashing code never replaces itself?
+
 L0004:
-  38D5 759355		MOV 93h, #55h ; CLRWDT = 0x55
-  38D8 758127		MOV SP, #27h ; SP = 0x27
-  38DB E4    		CLR A
-  38DC F5D0  		MOV PSW, A
+  38D5 759355		MOV 93h, #55h ; CLRWDT = 0x55  - reset watchdog
+  38D8 758127		MOV SP, #27h ; SP = 0x27 - set up stack pointer (grows upward)
+  38DB E4    		CLR A		; clear accumulator
+  38DC F5D0  		MOV PSW, A	; err, I mean, clear PSW.
   38DE 759E60		MOV 9Eh, #60h ; P4CON = 0x60
   38E1 75C07F		MOV 0C0h, #7Fh ; P4 = 0x7F
-  38E4 E596  		MOV A, 96h               ; 96h = MODE_FG
-  38E6 540A  		ANL A, #0Ah
-  38E8 600A  		JZ L0005
+  38E4 E596  		MOV A, 96h	; MODE_FG
+  38E6 540A  		ANL A, #0Ah ; check WDT (watchdog triggered) or POF (power cycled).
+								; note that I don't think we can actually get here if POF=1; note instruction at 380A
+  38E8 600A  		JZ L0005	
+ 
+; ------------------------------
+; this bit only runs if the watchdog was triggered (or power was cycled, but again, I don't think that can lead here)
 L0867:
-  38EA 75F301		MOV 0F3h, #1h ; DFC = 0x01
+  38EA 75F301		MOV 0F3h, #1h ; DFC = 0x01 => VPCON only ("USB pseudo plug off")
   38ED 114E  		ACALL L0006
   38EF D1CF  		ACALL L0007
-  38F1 75F3C2		MOV 0F3h, #0C2h ; DFC = 0xC2
+  38F1 75F3C2		MOV 0F3h, #0C2h ; DFC = 0xC2 => PULL_UP, USB_CON, ERWUP
+; ------------------------------
+
 L0005:
   38F4 5130  		ACALL L0008
-  38F6 75F3CA		MOV 0F3h, #0CAh ; DFC = 0xCA
-  38F9 759403		MOV 94h, #3h ; PREWDT = 0x03
+  38F6 75F3CA		MOV 0F3h, #0CAh ; DFC = 0xCA => PULL_UP, USB_CON, USBEN, ERWUP
+  38F9 759403		MOV 94h, #3h ; PREWDT = 0x03 => watchdog resets after 87ms
+
+; looks like this here is the top of the main processing loop.
 L0018:
-  38FC E520  		MOV A, 20h
+  38FC E520  		MOV A, 20h	; read data at memory address 0x20
 L0009:
-  38FE B441FD		CJNE A, #41h, L0009
-  3901 6524  		XRL A, 24h
+  38FE B441FD		CJNE A, #41h, L0009	; while (mem[0x20] != 'A') ;
+
+  3901 6524  		XRL A, 24h			; A ^= mem[0x24]. 
+
+; This will enter an infinite loop if mem[0x24] was not 'A', unless an interrupt messes with things
+; (that hasn't been ruled out, by the way)
 L0010:
-  3903 70FE  		JNZ L0010
+  3903 70FE  		JNZ L0010			;
+; https://www.edsim51.com/8051Notes/8051/memory.html#:~:text=Bit-addressable%20Locations
+; still don't understand how the addressing works here. It'd make sense if all SFRs were on 8-byte boundaries,
+; because then there'd be a clear mapping between the byte-address and bit-address of each register, but
+; that isn't the case.
+
+; in any case, this loops as long as interrupts are enabled.  Which suggests that it's waiting for an interrupt to happen,
+; and for that interrupt handler to complete WITHOUT reenabling interrupts. Interesting; that suggests that this is alternate
+; interrupt-handling code.
+
 L0011:
-  3905 20AFFD		JB EA, L0011
+  3905 20AFFD		JB EA, L0011			;
+
   3908 759355		MOV 93h, #55h            ; 93h = CLRWDT
   390B E5DB  		MOV A, 0DBh              ; 0DBh = IF2
   390D 30E03B		JNB ACC.0, L0012
+  
+; STUP (SETUP TOKEN) interrupt.
+; "When a SETUP TOKEN for endpoint 0 is done, it will set the STUP flag.
+;  Cleared by hardware when interrupt is processed. Write “0” to clear, write “1”
+;  no effect."
+; (SO - I wonder how the hardware knows that the interrupt's been processed.)
+
   3910 53DBFE		ANL 0DBh, #0FEh          ; 0DBh = IF2
+
+ALT_STUP_HANDLER:
 L0091:
   3913 E5EF  		MOV A, 0EFh ; read from RXFLG0
-  3915 5418  		ANL A, #18h
+  3915 5418  		ANL A, #18h	; check if R0_OW or R0SEQ is set.  Semantics for R0SEQ are very unclear.
   3917 701C  		JNZ L0013
-  3919 7153  		ACALL L0014
+  3919 7153  		ACALL L0014	; read packet (8 bytes) from host
   391B BB0820		CJNE R3, #8h, L0015
   391E 43EF04		ORL 0EFh, #4h ; RXFLG0 |= 0x04
   3921 53EFFE		ANL 0EFh, #0FEh ; RXFLG0 &= 0xFE
@@ -7488,11 +7561,25 @@ L0089:
 
 L0012:
   394B 30E105		JNB ACC.1, L0090
+
+; OWSTUP
+; "When a receiving setup token overwrites the existing data in FIFO, R0_OW will
+;  set 1. After the overwriting setup packet is received and a following IN or OUT
+;  token happens, OWSTUP is set. Cleared by hardware when interrupt is
+;  processed. Write “0” to clear, write “1” no effect."
+; (SO - I wonder how the hardware knows that the interrupt's been processed.)
+
   394E 53DBFD		ANL 0DBh, #0FDh          ; 0DBh = IF2
   3951 2113  		AJMP L0091
 
 L0090:
-  3953 30E31F		JNB ACC.3, L0092
+  3953 30E31F		JNB ACC.3, L0092		; 3?  what happened to 2?
+  
+; IN0
+; "When IN token for endpoint 0 is done, it will set the IN0 flag. Cleared by
+;  hardware when interrupt is processed. Write “0” to clear, write “1” no effect."
+; (SO - I wonder how the hardware knows that the interrupt's been processed.)
+
   3956 53DBF7		ANL 0DBh, #0F7h ; IF2 &= 0xF7
   3959 53EFFB		ANL 0EFh, #0FBh ; RXFLG0 &= 0xFB
   395C 203004		JB 30h, L0093
@@ -7513,18 +7600,30 @@ L0095:
 
 L0092:
   3975 30E42C		JNB ACC.4, L0103
-  3978 53DBEF		ANL 0DBh, #0EFh ; IF2 &= 0xEF
+ 
+; OUT0
+; "When OUT token for endpoint 0 is done, it will set the OUT0 flag. Cleared by
+;  hardware when interrupt is processed. Write “0” to clear, write “1” no effect."
+
+  3978 53DBEF		ANL 0DBh, #0EFh ; IF2 &= 0xEF	-> clear interrupt indicator
   397B E5EF  		MOV A, 0EFh              ; 0EFh = RXFLG0
-  397D 20E414		JB ACC.4, L0104
-  3980 43EF04		ORL 0EFh, #4h ; RXFLG0 |= 0x04
-  3983 203104		JB 31h, L0105
-  3986 E5EE  		MOV A, 0EEh ; read from RXCNT0
+  397D 20E414		JB ACC.4, L0104			; jump if set; "This bit is set as long as receiving FIFO is corrupted by setup token"
+  3980 43EF04		ORL 0EFh, #4h ; RXFLG0 |= 0x04	; OUT0ENB=1: The SH68F83 will respond OUT0 token with NAK.
+; I'm betting that the OUT0ENB flag is being used as flow-control here.
+
+  3983 203104		JB 31h, L0105					; looks like this is bit 1 of mem[0x26]
+  3986 E5EE  		MOV A, 0EEh ; read from RXCNT0 (number of bytes in RX FIFO)
   3988 700E  		JNZ L0106
+  
+; so we get here if (mem[0x26] & 0x02) -or- if RXCNT0 is zero
 L0105:
   398A 53EFFE		ANL 0EFh, #0FEh ; RXFLG0 &= 0xFE
   398D 71F1  		ACALL L0019
+  
+; we can get here by falling through from above, OR we get here as the final processing of L0106.
 L0108:
-  398F 53EFFB		ANL 0EFh, #0FBh ; RXFLG0 &= 0xFB
+  398F 53EFFB		ANL 0EFh, #0FBh ; RXFLG0 &= 0xFB	; OUT0ENB=0: The device will receive the data of OUT0 packet when RX FIFO 0 is empty
+and respond ACK if no bit stuffing error or CRC error.
   3992 01FC  		AJMP L0018
 
 L0104:
@@ -7532,11 +7631,12 @@ L0104:
   3996 213E  		AJMP L0015
 
 L0106:
-  3998 7153  		ACALL L0014
-  399A 43EF04		ORL 0EFh, #4h ; RXFLG0 |= 0x04
-  399D 53EFFE		ANL 0EFh, #0FEh ; RXFLG0 &= 0xFE
-  39A0 71AD  		ACALL L0107
-  39A2 218F  		AJMP L0108
+; looks like we got some data from the host! let's process it
+  3998 7153  		ACALL L0014	; read packet (8 bytes) from host
+  399A 43EF04		ORL 0EFh, #4h ; RXFLG0 |= 0x04   ; OUT0ENB=1: The SH68F83 will respond OUT0 token with NAK.
+  399D 53EFFE		ANL 0EFh, #0FEh ; RXFLG0 &= 0xFE  ; clear R0FULL; hardware will set it again at the appropriate time
+  39A0 71AD  		ACALL L0107 ; betting this does something with the packet we just read
+  39A2 218F  		AJMP L0108	; finish up and go back to main processing loop
 
 L0103:
   39A4 01FC  		AJMP L0018
@@ -7800,11 +7900,23 @@ L0085:
   3B51 6192  		AJMP L0053
 
 L0014:
+READ_PACKET_FROM_HOST:
+	; called from the alternate interrupt processing code (suspected purpose: firmware updates)
+	; for: setup tokens, overwriting setup tokens, and OUT0 (message received by endpoint 0)
+	; upon return:
+	;	Memory starting at 0x08 contains packet contents
+	;	R0 is address of first byte after the meaningful contents of the buffer
+	;	R1 is zero
+	;	R3 contains number of bytes in packet
+	;	A also contains number of bytes in packet
+
   3B53 7808  		MOV R0, #8h
   3B55 E5EE  		MOV A, 0EEh ; read from RXCNT0
   3B57 F9    		MOV R1, A
   3B58 FB    		MOV R3, A
-  3B59 6005  		JZ L0087
+  3B59 6005  		JZ L0087	; the only place I would expect this to jump is when called by the STUP handler.
+  
+; okay, read the contents of the message (max 8 bytes) into RAM, starting at address 0x08
 L0088:
   3B5B A6ED  		MOV @R0, 0EDh ; read from RXDAT0
   3B5D 08    		INC R0
@@ -7870,35 +7982,45 @@ L0057:
 L0055:
   3BAC 22    		RET
 
+
+; called only from L0106 after a packet has been received
 L0107:
-  3BAD E510  		MOV A, 10h
-  3BAF B40220		CJNE A, #2h, L0109
-  3BB2 E509  		MOV A, 9h
-  3BB4 F4    		CPL A
-  3BB5 5511  		ANL A, 11h
-  3BB7 30E214		JNB ACC.2, L0110
+  3BAD E510  		MOV A, 10h              ; A = mem[0x10]
+; this looks like a switch statement.
+  3BAF B40220		CJNE A, #2h, L0109		; if (mem[0x10] != 0x02) L0109
+
+; case 2:
+  3BB2 E509  		MOV A, 9h				; A = rxpacket[1]
+  3BB4 F4    		CPL A					; A = ~rxpacket[1]
+  3BB5 5511  		ANL A, 11h				; A = ~rxpacket[1] & mem[0x11]
+  3BB7 30E214		JNB ACC.2, L0110		; if ((mem[0x11] & ~rxpacket[1]) & 0x04) L0110
+  
+; (SO) initial guess: we're done whatever special thing we were doing and now we're restarting
   3BBA 53F3F7		ANL 0F3h, #0F7h          ; 0F3h = DFC
   3BBD 759E60		MOV 9Eh, #60h            ; 9Eh = P4CON
   3BC0 75C07F		MOV 0C0h, #7Fh           ; 0C0h = P4
   3BC3 1161  		ACALL L0033
   3BC5 5130  		ACALL L0008
-  3BC7 75F301		MOV 0F3h, #1h ; DFC = 1
+  3BC7 75F301		MOV 0F3h, #1h ; DFC = 1	; VPCON=1: Perform USB pseudo plug-off
   3BCA D1C5  		ACALL L0111
-  3BCC 0138  		AJMP L0003
+  3BCC 0138  		AJMP L0003   ; L0003 is part of the startup code
 
 L0110:
-  3BCE 850911		MOV 11h, 9h
+  3BCE 850911		MOV 11h, 9h				;  mem[0x11] = rxpacket[1];
 L0574:
+; default:
   3BD1 22    		RET
 
 L0109:
   3BD2 B40406		CJNE A, #4h, L0516
+; case 4:
   3BD5 910D  		ACALL L0517
   3BD7 7B00  		MOV R3, #0h
   3BD9 4186  		AJMP L0024
 
 L0516:
   3BDB B40602		CJNE A, #6h, L0569
+; case 6:
   3BDE 81D7  		AJMP L0570
 
 L0569:
@@ -7934,24 +8056,35 @@ L0028:
 L0518:
   3C0C 22    		RET
 
+; ------------------------------------------
+;
+; some sort of handler for received packets (state 4)
+
 L0517:
-  3C0D E508  		MOV A, 8h
-  3C0F B405FA		CJNE A, #5h, L0518
-  3C12 E509  		MOV A, 9h
-  3C14 B47702		CJNE A, #77h, L0519
+; called only by case 4 elsewhere
+  3C0D E508  		MOV A, 8h				; A = rxpacket[0]
+  3C0F B405FA		CJNE A, #5h, L0518		; if (rxpacket[0] != 5) L0518
+											; L0518is a RET, so: if (rxpacket[0] != 5) return
+  3C12 E509  		MOV A, 9h				; A = rxpacket[1]
+  3C14 B47702		CJNE A, #77h, L0519		; if (rxpacket[1] != 0x77 ('w')) L0519
+ ; rxpacket[1] == 'w'
   3C17 811B  		AJMP L0520
 
 L0519:
-  3C19 F513  		MOV 13h, A
+ ; rxpacket[1] != 'w'
+  3C19 F513  		MOV 13h, A				; prev_cmd = rxpacket[1]
 L0520:
-  3C1B B4521E		CJNE A, #52h, L0521
+  3C1B B4521E		CJNE A, #52h, L0521		; if (rxpacket[1] != 'R') L0521
+  
+; rxpacket[1] == 'R'
   3C1E 9137  		ACALL L0031
   3C20 6008  		JZ L0522
-  3C22 E50B  		MOV A, 0Bh
+  3C22 E50B  		MOV A, 0Bh				; rxpacket[3]
   3C24 B4FC0C		CJNE A, #0FCh, L0523
-  3C27 750A00		MOV 0Ah, #0h
+ ; rxpacket[3] == 0xFC
+  3C27 750A00		MOV 0Ah, #0h			; set rxpacket[3] to 0
 L0522:
-  3C2A AC0A  		MOV R4, 0Ah
+  3C2A AC0A  		MOV R4, 0Ah				; 
   3C2C AD0B  		MOV R5, 0Bh
 L0084:
   3C2E 8C14  		MOV 14h, R4
@@ -7963,6 +8096,8 @@ L0523:
   3C34 F513  		MOV 13h, A
   3C36 22    		RET
 
+; a strange subroutine...
+; sets A to (mem[0x27] ^ 0xA5)
 L0031:
   3C37 E527  		MOV A, 27h
   3C39 64A5  		XRL A, #0A5h
@@ -7970,12 +8105,14 @@ L0031:
 
 L0521:
   3C3C B45706		CJNE A, #57h, L0524
+; rxpacket[1] == 'W'
   3C3F 9137  		ACALL L0031
   3C41 70F0  		JNZ L0523
   3C43 812A  		AJMP L0522
 
 L0524:
   3C45 B45609		CJNE A, #56h, L0525
+; rxpacket[1] == 'V'
   3C48 912A  		ACALL L0522
   3C4A EC    		MOV A, R4
   3C4B 4D    		ORL A, R5
@@ -7985,8 +8122,10 @@ L0524:
 
 L0525:
   3C51 B47727		CJNE A, #77h, L0526
+; rxpacket[1] == 'w'
   3C54 E513  		MOV A, 13h
   3C56 B457B3		CJNE A, #57h, L0518
+; prev_cmd == 'W'
   3C59 71FB  		ACALL L0083
   3C5B 7A04  		MOV R2, #4h
   3C5D 790A  		MOV R1, #0Ah
@@ -8094,6 +8233,7 @@ L0571:
   3D00 22    		RET
 
 L0575:
+; case 8:
   3D01 EB    		MOV A, R3
   3D02 6014  		JZ L0035
   3D04 B40800		CJNE A, #8h, L0576
