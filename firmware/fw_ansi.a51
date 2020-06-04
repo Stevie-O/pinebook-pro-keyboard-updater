@@ -7452,7 +7452,7 @@ L0609:
   38D0 D1C5  		ACALL L0111
   38D2 30C5F5		JNB 0C5h, L0609          ; bit.0C5h = P4.5
   
-; this routine is reached after CUP reset in the following condition:
+; this routine is reached after CPU reset in the following condition:
 ; - Reset was caused by a USB RESET after the device was already powered on and initialized, AND
 ; - the string "AKIR" is stored in RAM at 0x20-0x23
 ;      OR
@@ -7467,6 +7467,18 @@ L0609:
 ;	- It looks like all available address space is being used, so there's no "spare" space for the flashing code.
 ;	  Other devices I've worked on solved the problem by having the flashing code run from RAM; that's not possible here.
 ;     I wonder if the actual firmware-flashing code never replaces itself?
+;
+;	  (much later): Looks that way.
+;
+; Later update: This is definitely where the firmware flashing support lives.
+;
+; Some notes:
+; - Flash memory region goes from 0x0000 to 0x3FFF.  However, around @3D5A is a check that prevents erasing anything beyond 0x3800.
+;   (Which, hey! 0x3800 is the address of L0001, the first code run after a restart.)
+; - Firmware update code allows flash writes (but not erasures, so this is write-once-only) to 0x3FC0..0x3FFF.
+;   (This may have been intended to support injecting a serial number or something.)
+;   See L0039; the last step is a fall-through for addresses greater than 0x3FBF and less than 0x4000.
+; 
 
 L0004:
   38D5 759355		MOV 93h, #55h ; CLRWDT = 0x55  - reset watchdog
@@ -7500,7 +7512,7 @@ L0018:
 L0009:
   38FE B441FD		CJNE A, #41h, L0009	; while (mem[0x20] != 'A') ;
 
-  3901 6524  		XRL A, 24h			; A ^= mem[0x24]. 
+  3901 6524  		XRL A, 24h			; A ^= mem[0x24]
 
 ; This will enter an infinite loop if mem[0x24] was not 'A', unless an interrupt messes with things
 ; (that hasn't been ruled out, by the way)
@@ -8074,26 +8086,26 @@ L0519:
  ; rxpacket[1] != 'w'
   3C19 F513  		MOV 13h, A				; prev_cmd = rxpacket[1]
 L0520:
-  3C1B B4521E		CJNE A, #52h, L0521		; if (rxpacket[1] != 'R') L0521
+  3C1B B4521E		CJNE A, #52h, L0521		; if (prev_cmd != 'R') L0521
   
 ; rxpacket[1] == 'R'
-  3C1E 9137  		ACALL L0031
-  3C20 6008  		JZ L0522
+  3C1E 9137  		ACALL L0031				; sets A to (mem[0x27] ^ 0xA5)
+  3C20 6008  		JZ L0522				; if the result is zero, go to L0522
   3C22 E50B  		MOV A, 0Bh				; rxpacket[3]
-  3C24 B4FC0C		CJNE A, #0FCh, L0523
- ; rxpacket[3] == 0xFC
-  3C27 750A00		MOV 0Ah, #0h			; set rxpacket[3] to 0
+  3C24 B4FC0C		CJNE A, #0FCh, L0523	; if (rxpacket[3] != 0xFC) L0523
+; rxpacket[3] == 0xFC
+  3C27 750A00		MOV 0Ah, #0h			; set rxpacket[2] to 0
 L0522:
-  3C2A AC0A  		MOV R4, 0Ah				; 
-  3C2C AD0B  		MOV R5, 0Bh
+  3C2A AC0A  		MOV R4, 0Ah				; R4 = rxpacket[2]
+  3C2C AD0B  		MOV R5, 0Bh				; R5 = rxpacket[3]
 L0084:
-  3C2E 8C14  		MOV 14h, R4
-  3C30 8D15  		MOV 15h, R5
+  3C2E 8C14  		MOV 14h, R4				; mem[0x14] = R4
+  3C30 8D15  		MOV 15h, R5				; mem[0x15] = R5
   3C32 22    		RET
 
 L0523:
   3C33 E4    		CLR A
-  3C34 F513  		MOV 13h, A
+  3C34 F513  		MOV 13h, A				; A = mem[0x13] = 0x00
   3C36 22    		RET
 
 ; a strange subroutine...
@@ -8130,6 +8142,7 @@ L0525:
   3C5B 7A04  		MOV R2, #4h
   3C5D 790A  		MOV R1, #0Ah
 L0530:
+; state 6 jumps in here from 
   3C5F EE    		MOV A, R6
   3C60 4F    		ORL A, R7
   3C61 600B  		JZ L0527
@@ -8205,49 +8218,64 @@ L0553:
 L0551:
   3CD6 22    		RET
 
+; entirety of handler for packet received in state 6
+
 L0570:
-  3CD7 E513  		MOV A, 13h
-  3CD9 54FE  		ANL A, #0FEh
-  3CDB B4561F		CJNE A, #56h, L0571
-  3CDE 103708		JBC 37h, L0572
-  3CE1 EB    		MOV A, R3
-  3CE2 7908  		MOV R1, #8h
+  3CD7 E513  		MOV A, 13h				; A = prevcmd (set by state 4)
+  3CD9 54FE  		ANL A, #0FEh			; mask out low bit
+  3CDB B4561F		CJNE A, #56h, L0571		; if (!(prevcmd == 'V' || prevcmd == 'W')) L0571 -- which clears prevcmd and returns
+  3CDE 103708		JBC 37h, L0572			; bit 7 of mem[0x26]
+
+; So this is a giant if/else block:
+//	if (mem[0x26] & 0x80) { @3CE1-@3CE2 }
+//	else { (L0572) @3CE9-@3CFB }
+//  (L0573) @3CE4-@3CE7
+
+  3CE1 EB    		MOV A, R3				; A = R3
+  3CE2 7908  		MOV R1, #8h				; R1 = 8
+  
+; this looks like the start of a loop at first
+; backwards jump to L0573 from @3CFB
+; however, that AJMP never returns.
 L0573:
-  3CE4 FA    		MOV R2, A
-  3CE5 71FB  		ACALL L0083
+  3CE4 FA    		MOV R2, A				; R2 = A (which is either R3 or R3-2.  This is interesting, because R1 is correspondingly 8 or 10.)
+  3CE5 71FB  		ACALL L0083				; R4 = mem[0x14], R5 = mem[0x15]
   3CE7 815F  		AJMP L0530
 
 L0572:
-  3CE9 E509  		MOV A, 9h
-  3CEB 6420  		XRL A, #20h
-  3CED B5130D		CJNE A, 13h, L0571
-  3CF0 E508  		MOV A, 8h
-  3CF2 B40608		CJNE A, #6h, L0571
-  3CF5 790A  		MOV R1, #0Ah
-  3CF7 EB    		MOV A, R3
-  3CF8 C3    		CLR C
-  3CF9 9402  		SUBB A, #2h
-  3CFB 50E7  		JNC L0573
+  3CE9 E509  		MOV A, 9h				; A = rxpacket[1]
+  3CEB 6420  		XRL A, #20h				; XOR it with 0x20
+  3CED B5130D		CJNE A, 13h, L0571		; so: if (rxpacket[1] != '3') bail
+  3CF0 E508  		MOV A, 8h				; A = rxpacket[0]
+  3CF2 B40608		CJNE A, #6h, L0571		; if (rxpacket[0) != 0x06) bail
+											; note that state 4 requires 0x05, while state 6 requires 0x06
+  3CF5 790A  		MOV R1, #0Ah			; R1 = 0x0A (as opposed to 0x08, set by @3CE2 in the other code path)
+  3CF7 EB    		MOV A, R3				; A = R3 (matching @3CE1 from the other code path)
+  3CF8 C3    		CLR C					; clear carry to set up subtraction
+  3CF9 9402  		SUBB A, #2h				; A -= 2
+  3CFB 50E7  		JNC L0573				; if (A < 0) return, else continue from L0573
 L0571:
-  3CFD 751300		MOV 13h, #0h
+  3CFD 751300		MOV 13h, #0h			; prevcmd = 0x00
   3D00 22    		RET
 
 L0575:
 ; case 8:
-  3D01 EB    		MOV A, R3
+  3D01 EB    		MOV A, R3				; A = R3
   3D02 6014  		JZ L0035
-  3D04 B40800		CJNE A, #8h, L0576
+  3D04 B40800		CJNE A, #8h, L0576		; if (R3 == 0x08) { goto L0576 } else { goto L0576 }. Awesome.
 L0576:
-  3D07 4002  		JC L0577
-  3D09 7408  		MOV A, #8h
+  3D07 4002  		JC L0577				; no idea what set up C for us here.  Worrisome.
+  3D09 7408  		MOV A, #8h				; A = 8 if carry clear
 L0577:
-  3D0B FA    		MOV R2, A
-  3D0C 7908  		MOV R1, #8h
+  3D0B FA    		MOV R2, A				; R2 = A (which is either R3, if carry was set, or 8, if carry was clear)
+  3D0C 7908  		MOV R1, #8h				; R1 = &rxpacket[0]
+  
+  ; top of loop
 L0578:
-  3D0E EE    		MOV A, R6
-  3D0F 4F    		ORL A, R7
-  3D10 6006  		JZ L0035
-  3D12 E7    		MOV A, @R1
+  3D0E EE    		MOV A, R6				; A = R6
+  3D0F 4F    		ORL A, R7				; A |= R7
+  3D10 6006  		JZ L0035				; soo if (R6 == 0 && R7 == 0) L0035
+  3D12 E7    		MOV A, @R1				; A = *R1
   3D13 B1C4  		ACALL L0529
   3D15 09    		INC R1
   3D16 DAF6  		DJNZ R2, L0578
@@ -8277,51 +8305,65 @@ L0048:
   3D37 75BF00		MOV 0BFh, #0h            ; 0BFh = IB_DATA
   3D3A 74E6  		MOV A, #0E6h
 L0037:
-  3D3C F5B3  		MOV 0B3h, A ; IB_CON1
-  3D3E 759355		MOV 93h, #55h            ; 93h = CLRWDT
-  3D41 751C05		MOV 1Ch, #5h
-  3D44 E512  		MOV A, 12h
-  3D46 B40555		CJNE A, #5h, L0038
+  3D3C F5B3  		MOV 0B3h, A 			 ; Write command (E6=erase, 6E=write byte) to IB_CON1	
+  3D3E 759355		MOV 93h, #55h            ; 93h = CLRWDT (reset watchdog)
+  3D41 751C05		MOV 1Ch, #5h			 ; mem[0x1C] = 0x05
+  3D44 E512  		MOV A, 12h				 ; A = mem[0x12]
+  3D46 B40555		CJNE A, #5h, L0038		 ; if (mem[0x12] != 0x05) L0038
 L0046:
-  3D49 851CB4		MOV 0B4h, 1Ch            ; 0B4h = IB_CON2
-  3D4C 751C0A		MOV 1Ch, #0Ah
-  3D4F 851DB5		MOV 0B5h, 1Dh            ; 0B5h = IB_CON3
-  3D52 851EB6		MOV 0B6h, 1Eh            ; 0B6h = IB_CON4
-  3D55 E5B3  		MOV A, 0B3h ; IB_CON1
-  3D57 B4E61A		CJNE A, #0E6h, L0039
-  3D5A E5F7  		MOV A, 0F7h ; XPAGE
-  3D5C 24C8  		ADD A, #0C8h
-  3D5E 502B  		JNC L0040
-  3D60 8030  		SJMP L0041
+  3D49 851CB4		MOV 0B4h, 1Ch            ; 0B4h = IB_CON2 => IB_CON2 = mem[0x1C]; must be 0x05 to continue properly (->S1)
+  3D4C 751C0A		MOV 1Ch, #0Ah			 ; mem[0x1C] = 0x0A;
+  3D4F 851DB5		MOV 0B5h, 1Dh            ; 0B5h = IB_CON3 => IB_CON3 = mem[0x1D]; must be 0x0A to continue properly (->S2)
+  3D52 851EB6		MOV 0B6h, 1Eh            ; 0B6h = IB_CON4 => IB_CON4 = mem[0x1E]; must be 0x09 to continue properly (->S3)
+  3D55 E5B3  		MOV A, 0B3h ; IB_CON1	 ; 
+  3D57 B4E61A		CJNE A, #0E6h, L0039	 ; if (not erase mode mode) L0039
+  3D5A E5F7  		MOV A, 0F7h ; XPAGE		 ; read page number
+  3D5C 24C8  		ADD A, #0C8h		     ; subtract 0x38 (0011 1000)
+  3D5E 502B  		JNC L0040				 ; if (XPAGE < 0x38) goto COMPLETE_WRITE_OR_ERASE
+  3D60 8030  		SJMP L0041				 ; else bail
+
+; this is another strangely constructed if/else block.
 
 L0042:
+; we get here if someone is writing somewhere in the range 0x0000..0x00FF.
   3D62 E5BE  		MOV A, 0BEh              ; 0BEh = IB_OFFSET
-  3D64 B40300		CJNE A, #3h, L0043
+  3D64 B40300		CJNE A, #3h, L0043		; yet another conditional-jump-to-next-instruction.  How odd.
 L0043:
-  3D67 5022  		JNC L0040
-  3D69 04    		INC A
-  3D6A 83    		MOVC A, @A+PC
-  3D6B 8002  		SJMP L0044
+  3D67 5022  		JNC L0040				; if (!carry) COMPLETE_WRITE_OR_ERASE
+  3D69 04    		INC A					; A = IB_OFFSET + 1
+  3D6A 83    		MOVC A, @A+PC			; Read value from (@36DB + A) = (@36DC + IB_OFFSET)
+  3D6B 8002  		SJMP L0044				; skip over the following two bytes. How odd.
+
+; Okay, this is a remarkably strange coincidence.
+; The bytes starting at @3D6B are 80 02 38 00
+; When viewed from @3D6B, this is SJMP $+2, skipping over the 38 00
+; When viewed from @3D6C, this is LJMP 0x3800, which is the instruction stored at the reset vector.
+; This code is verifying that the data being written to address 0x0000..0002 is exactly LJMP 0x3800
+; I wonder what they would have done if, in another world, the opcode for LJMP was 0xFF.
 
   3D6D 38    		DB 038h ; '8'
   3D6E 00    		DB 000h 
 L0044:
-  3D6F B5BF20		CJNE A, 0BFh, L0041      ; 0BFh = IB_DATA
-  3D72 A18B  		AJMP L0040
+  3D6F B5BF20		CJNE A, 0BFh, L0041      ; 0BFh = IB_DATA => if (A != IB_DATA) bail
+  3D72 A18B  		AJMP L0040				 ; goto COMPLETE_WRITE_OR_ERASE
 
 L0039:
-  3D74 B46E14		CJNE A, #6Eh, L0040
+; we get here if we're not in erase mode
+  3D74 B46E14		CJNE A, #6Eh, L0040		; if (not program mode) goto COMPLETE_WRITE_OR_ERASE
   3D77 E5F7  		MOV A, 0F7h ; XPAGE
-  3D79 60E7  		JZ L0042
-  3D7B 24C8  		ADD A, #0C8h
-  3D7D 500C  		JNC L0040
-  3D7F 24F9  		ADD A, #0F9h
-  3D81 500F  		JNC L0041
-  3D83 700D  		JNZ L0041
+  3D79 60E7  		JZ L0042				; if (writing to 0x0000..0x00FF) goto L0042
+  3D7B 24C8  		ADD A, #0C8h			; (subtract 0x38)
+  3D7D 500C  		JNC L0040				; if (dest address < 0x3800) goto COMPLETE_WRITE_OR_ERASE
+  3D7F 24F9  		ADD A, #0F9h			; (subtract 0x07, for a total of 0x3F)
+  3D81 500F  		JNC L0041				; if (0x3800 <= dest_address && dest address < 0x3F00) then bail
+  3D83 700D  		JNZ L0041				; if (0x3FFF < dest_address) then bail
+  ; we only reach this point for addresses 0x3F00..0x3FFF
   3D85 E5BE  		MOV A, 0BEh              ; 0BEh = IB_OFFSET
-  3D87 2441  		ADD A, #41h
-  3D89 5007  		JNC L0041
+  3D87 2441  		ADD A, #41h				 ; subtract 0xBF
+  3D89 5007  		JNC L0041				 ; if (0x3FBF < dest_address) then bail
 L0040:
+COMPLETE_WRITE_OR_ERASE:
+  ; perform program/sector operation, then 4 NOPs as per 11.3.2 (page 48)
   3D8B 851FB7		MOV 0B7h, 1Fh            ; 0B7h = IB_CON5
   3D8E 00    		NOP
   3D8F 00    		NOP
@@ -8329,6 +8371,7 @@ L0040:
   3D91 00    		NOP
 L0041:
   3D92 E4    		CLR A
+  ; clear all five SSP registers  
   3D93 F5B3  		MOV 0B3h, A ; IB_CON1
   3D95 F5B4  		MOV 0B4h, A              ; 0B4h = IB_CON2
   3D97 F5B5  		MOV 0B5h, A              ; 0B5h = IB_CON3
@@ -8369,8 +8412,8 @@ L0562:
 
 L0529:
   3DC4 F5BF  		MOV 0BFh, A              ; 0BFh = IB_DATA
-  3DC6 E512  		MOV A, 12h
-  3DC8 B44102		CJNE A, #41h, L0531
+  3DC6 E512  		MOV A, 12h				 ; A = mem[0x12]
+  3DC8 B44102		CJNE A, #41h, L0531		 ; if (mem[0x12] != 'A') L0531
   3DCB C108  		AJMP L0532
 
 L0531:
@@ -8410,15 +8453,15 @@ L0547:
   3E03 4003  		JC L0532
   3E05 BCFA11		CJNE R4, #0FAh, L0539
 L0532:
-  3E08 ED    		MOV A, R5
-  3E09 B44000		CJNE A, #40h, L0533
+  3E08 ED    		MOV A, R5				; A = R5
+  3E09 B44000		CJNE A, #40h, L0533		; another conditional-jump-to-next-instruction.  How odd.
 L0533:
-  3E0C 5026  		JNC L0534
-  3E0E F5F7  		MOV 0F7h, A              ; 0F7h = XPAGE
+  3E0C 5026  		JNC L0534				; gotta find out what controls carry at this point
+  3E0E F5F7  		MOV 0F7h, A              ; 0F7h = XPAGE => top 8 bits of memory address to be written
 L0563:
-  3E10 8CBE  		MOV 0BEh, R4             ; 0BEh = IB_OFFSET
+  3E10 8CBE  		MOV 0BEh, R4             ; 0BEh = IB_OFFSET => R4: bottom 8 bits of memory address to be written
 L0542:
-  3E12 746E  		MOV A, #6Eh
+  3E12 746E  		MOV A, #6Eh				 ; 0x6E must be written to IB_CON1 to write to the selected block
 L0537:
   3E14 B13C  		ACALL L0037
   3E16 75F700		MOV 0F7h, #0h            ; 0F7h = XPAGE
