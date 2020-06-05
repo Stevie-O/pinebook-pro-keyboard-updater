@@ -1422,8 +1422,8 @@ RESERVED_VEC_007B:
 L0358:
   052A 7482  		MOV A, #82h
   052C 2537  		ADD A, 37h
-  052E F8    		MOV R0, A
-  052F E6    		MOV A, @R0
+  052E F8    		MOV R0, A		; R0 = 0x82 + mem[0x37]
+  052F E6    		MOV A, @R0		; A = mem[0x82 + mem[0x37]]
   0530 FF    		MOV R7, A
   0531 C3    		CLR C
   0532 9490  		SUBB A, #90h
@@ -1434,10 +1434,10 @@ L0359:
   0539 75F002		MOV B, #2h ; keymap gets loaded from here
   053C EF    		MOV A, R7
   053D A4    		MUL AB
-  053E 2415  		ADD A, #15h
+  053E 2415  		ADD A, #15h	; 0x0815 is address of keymap
   0540 F582  		MOV DPL, A
   0542 E5F0  		MOV A, B
-  0544 3408  		ADDC A, #8h
+  0544 3408  		ADDC A, #8h ; 0x0815 is address of keymap
   0546 F583  		MOV DPH, A
   0548 E4    		CLR A
   0549 93    		MOVC A, @A+DPTR ; get data from (2 * R7) + 0x815
@@ -6430,18 +6430,19 @@ L0487:
   22A5 F59A  		MOV 9Ah, A               ; 9Ah = P0CON
   22A7 F59B  		MOV 9Bh, A               ; 9Bh = P1CON
   22A9 F59C  		MOV 9Ch, A               ; 9Ch = P2CON
-  22AB 759D0D		MOV 9Dh, #0Dh ; P3CON = 0x0D
-  22AE 759E60		MOV 9Eh, #60h ; P4CON = 0x60
-  22B1 F5A4  		MOV 0A4h, A  ; something with the ports
-  22B3 F5A2  		MOV 0A2h, A              ; 0A2h = P0WK
+  22AB 759D0D		MOV 9Dh, #0Dh ; P3CON = 0x0D	- 0000 1101 -> P3.0 [SDA], P3.2 [SCL], P3.3 [INT] input/high-Z; ; others output
+  22AE 759E60		MOV 9Eh, #60h ; P4CON = 0x60    - 0110 0000 -> P4.5 [D+],  P4.6 [D-] input/high-Z; others output
+; this disables wakeups/interrupts on all the pins
+  22B1 F5A4  		MOV 0A4h, A 			 ; 0A4h = P2WK   
+  22B3 F5A2  		MOV 0A2h, A              ; 0A2h = P0WK 
   22B5 F5A3  		MOV 0A3h, A              ; 0A3h = P1WK
   22B7 F5A5  		MOV 0A5h, A              ; 0A5h = P3WK
-  22B9 53A6F8		ANL 0A6h, #0F8h          ; 0A6h = P4WK
+  22B9 53A6F8		ANL 0A6h, #0F8h          ; 0A6h = P4WK		disable wakeup on P4[0:2] which are LED output pins
   22BC 7580FF		MOV P0, #0FFh
   22BF 7590FF		MOV P1, #0FFh
   22C2 75B0FF		MOV P3, #0FFh
   22C5 75A0FF		MOV P2, #0FFh
-  22C8 43C007		ORL 0C0h, #7h            ; 0C0h = P4
+  22C8 43C007		ORL 0C0h, #7h            ; 0C0h = P4		turn off all LEDs
   22CB 22    		RET
 
 L0205:
@@ -7444,7 +7445,7 @@ L0591:
   38C2 7D37  		MOV R5, #37h
   38C4 7CFE  		MOV R4, #0FEh
   38C6 745A  		MOV A, #5Ah
-  38C8 B1BE  		ACALL L0562
+  38C8 B1BE  		ACALL L0562			; write 0x5A to address 0x37FE
 L0609:
   38CA C2C5  		CLR 0C5h                 ; bit.0C5h = P4.5
   38CC D1C5  		ACALL L0111
@@ -8166,34 +8167,34 @@ L0548:
   3C79 80F0  		SJMP L0549
 
 L0526:
-  3C7B B44116		CJNE A, #41h, L0550
+  3C7B B44116		CJNE A, #41h, L0550	; 'A'
   3C7E E50A  		MOV A, 0Ah
-  3C80 B44B11		CJNE A, #4Bh, L0550
+  3C80 B44B11		CJNE A, #4Bh, L0550	; 'K'
   3C83 E50B  		MOV A, 0Bh
-  3C85 B4490C		CJNE A, #49h, L0550
+  3C85 B4490C		CJNE A, #49h, L0550 ; 'I'
   3C88 E50C  		MOV A, 0Ch
-  3C8A B45207		CJNE A, #52h, L0550
+  3C8A B45207		CJNE A, #52h, L0550 ; 'R'
   3C8D E50D  		MOV A, 0Dh
-  3C8F B44102		CJNE A, #41h, L0550
+  3C8F B44102		CJNE A, #41h, L0550 ; 'A'
   3C92 F525  		MOV 25h, A
 L0550:
   3C94 54DF  		ANL A, #0DFh
-  3C96 B4453D		CJNE A, #45h, L0551
+  3C96 B4453D		CJNE A, #45h, L0551	; 'E'? (but we just did a bitwise op)
   3C99 E50A  		MOV A, 0Ah
-  3C9B B4450D		CJNE A, #45h, L0552
-  3C9E 630B4F		XRL 0Bh, #4Fh
-  3CA1 630C4C		XRL 0Ch, #4Ch
-  3CA4 630D43		XRL 0Dh, #43h
+  3C9B B4450D		CJNE A, #45h, L0552 ; 'E'
+  3C9E 630B4F		XRL 0Bh, #4Fh		; 'O'
+  3CA1 630C4C		XRL 0Ch, #4Ch		; 'L'
+  3CA4 630D43		XRL 0Dh, #43h		; 'C'
   3CA7 91CC  		ACALL L0553
   3CA9 E11B  		AJMP L0554
 
 L0552:
   3CAB B45A08		CJNE A, #5Ah, L0564
-  3CAE 7CFE  		MOV R4, #0FEh
+  3CAE 7CFE  		MOV R4, #0FEh		
 L0566:
   3CB0 7D37  		MOV R5, #37h
-  3CB2 E50B  		MOV A, 0Bh
-  3CB4 A1BE  		AJMP L0562
+  3CB2 E50B  		MOV A, 0Bh		
+  3CB4 A1BE  		AJMP L0562			; write mem[0x0B] to 0x37FE
 
 L0564:
   3CB6 B4A507		CJNE A, #0A5h, L0565
@@ -8290,21 +8291,33 @@ L0034:
   3D21 EC    		MOV A, R4
   3D22 B4FE04		CJNE A, #0FEh, L0036
   3D25 7455  		MOV A, #55h
-  3D27 A13C  		AJMP L0037
+  ; this will go through all the motions of writing to the flash chip
+  ; According to datasheet, it's a no-op though ("Other: don't care")
+  3D27 A13C  		AJMP L0037			; write/erase routine
 
 L0036:
-  3D29 B4FF04		CJNE A, #0FFh, L0048
+  3D29 B4FF04		CJNE A, #0FFh, L0048	; if (A != 0xFF) erase sector
 L0568:
-  3D2C 74AA  		MOV A, #0AAh
-  3D2E A13C  		AJMP L0037
+  3D2C 74AA  		MOV A, #0AAh		
+  ; this will go through all the motions of writing a flash chip
+  ; According to datasheet, it's a no-op though ("Other: don't care")
+  ; However, the fact that we have two paths that do this (One 0x55, one 0xAA) is suspicious.
+  ; 55 and AA show up in a lot of places; their bit patterns (01010101 and 10101010)
+  ; are exactly opposite one another, and are relatively unlikely to occur accidentally.
+  ; early IBM PC expansion ROMs had to have the value 55AA stored at the beginning; this was used
+  ; to detect the presence of optional ROM chips (absent chips would float either low to 0000 or high to FFFF)
+  3D2E A13C  		AJMP L0037			; write/erase routine
 
 L0048:
-  3D30 543C  		ANL A, #3Ch
-  3D32 F5F7  		MOV 0F7h, A ; XPAGE
+ERASE_SECTOR:
+; main erase routine
+  3D30 543C  		ANL A, #3Ch				 ; Clear top 2 bits (no valid sector there) and lower 2 bits (these are top two bits of IB_ADDR) of A
+  3D32 F5F7  		MOV 0F7h, A				 ; XPAGE
   3D34 75BE00		MOV 0BEh, #0h            ; 0BEh = IB_OFFSET
   3D37 75BF00		MOV 0BFh, #0h            ; 0BFh = IB_DATA
-  3D3A 74E6  		MOV A, #0E6h
+  3D3A 74E6  		MOV A, #0E6h			 ; Erase sector
 L0037:
+; main write routine
   3D3C F5B3  		MOV 0B3h, A 			 ; Write command (E6=erase, 6E=write byte) to IB_CON1	
   3D3E 759355		MOV 93h, #55h            ; 93h = CLRWDT (reset watchdog)
   3D41 751C05		MOV 1Ch, #5h			 ; mem[0x1C] = 0x05
@@ -8388,22 +8401,31 @@ L0045:
   3DA3 B441F7		CJNE A, #41h, L0047
   3DA6 A149  		AJMP L0046
 
+; --------------------------------------
+;
+;  Decrements a 16-bit value stored LSB_first in (R7:R6)
+
 L0058:
-  3DA8 EE    		MOV A, R6
+DECREMENT_16BIT_R7_R6:
+  3DA8 EE    		MOV A, R6				 ; Okay, we're decrementing a 16-bit value stored in (R7:R6)
   3DA9 7001  		JNZ L0080
   3DAB 1F    		DEC R7
 L0080:
   3DAC 1E    		DEC R6
   3DAD 22    		RET
 
+; ---------------------------------------
+;
+; Writes 023800 (LJMP 0x3800) to the reset vector
+
 L0556:
   3DAE 7D00  		MOV R5, #0h
   3DB0 7C01  		MOV R4, #1h
-  3DB2 7438  		MOV A, #38h
+  3DB2 7438  		MOV A, #38h		; write 0x38 to 0x0001
   3DB4 B1BE  		ACALL L0562
-  3DB6 7400  		MOV A, #0h
+  3DB6 7400  		MOV A, #0h		; write 0x00 to 0x0000
   3DB8 B1BE  		ACALL L0562
-  3DBA 7C00  		MOV R4, #0h
+  3DBA 7C00  		MOV R4, #0h		; write 0x02 to 0x0000 - LJMP 0x3800
   3DBC 7402  		MOV A, #2h
 L0562:
   3DBE F5BF  		MOV 0BFh, A              ; 0BFh = IB_DATA
@@ -8418,23 +8440,25 @@ L0529:
 
 L0531:
   3DCD BDFC0A		CJNE R5, #0FCh, L0541
-  3DD0 75F73F		MOV 0F7h, #3Fh ; XPAGe
+  3DD0 75F73F		MOV 0F7h, #3Fh ; XPAGE
   3DD3 EC    		MOV A, R4
   3DD4 44C0  		ORL A, #0C0h
   3DD6 F5BE  		MOV 0BEh, A              ; 0BEh = IB_OFFSET
   3DD8 C112  		AJMP L0542
 
 L0541:
-  3DDA ED    		MOV A, R5
+  3DDA ED    		MOV A, R5				; (R5 = destination address high byte)
   3DDB 700F  		JNZ L0543
-  3DDD EC    		MOV A, R4
+  3DDD EC    		MOV A, R4				; (R4 = destination address low byte)
   3DDE B40300		CJNE A, #3h, L0544
 L0544:
-  3DE1 5025  		JNC L0532
+  3DE1 5025  		JNC L0532				; if (destination address < 0x0003) {
   3DE3 75F737		MOV 0F7h, #37h           ; 0F7h = XPAGE
   3DE6 24FB  		ADD A, #0FBh
   3DE8 F5BE  		MOV 0BEh, A              ; 0BEh = IB_OFFSET
-  3DEA C112  		AJMP L0542
+											;		destination address += 0x37FB
+											; }
+  3DEA C112  		AJMP L0542				; write byte to flash
 
 L0543:
   3DEC B4FF09		CJNE A, #0FFh, L0545
@@ -8446,31 +8470,33 @@ L0543:
 L0545:
   3DF8 B43800		CJNE A, #38h, L0546
 L0546:
-  3DFB 501C  		JNC L0539
+  3DFB 501C  		JNC L0539				; prevent writes >= 0x3800
   3DFD B43708		CJNE A, #37h, L0532
   3E00 BCFA00		CJNE R4, #0FAh, L0547
 L0547:
   3E03 4003  		JC L0532
-  3E05 BCFA11		CJNE R4, #0FAh, L0539
+  3E05 BCFA11		CJNE R4, #0FAh, L0539	; prevent writes >= 0x37FB (code is checking '> 0x37FA')
 L0532:
+  ; so it looks like R4:R5 is the address to be programmed
   3E08 ED    		MOV A, R5				; A = R5
-  3E09 B44000		CJNE A, #40h, L0533		; another conditional-jump-to-next-instruction.  How odd.
+  3E09 B44000		CJNE A, #40h, L0533		; set carry if A < 0x40
 L0533:
-  3E0C 5026  		JNC L0534				; gotta find out what controls carry at this point
+  3E0C 5026  		JNC L0534				; if (A >= 0x40) L0534.  Since A is used for XPAGE, and >= 0x40 is invalid, I bet this is an error path
   3E0E F5F7  		MOV 0F7h, A              ; 0F7h = XPAGE => top 8 bits of memory address to be written
 L0563:
   3E10 8CBE  		MOV 0BEh, R4             ; 0BEh = IB_OFFSET => R4: bottom 8 bits of memory address to be written
 L0542:
   3E12 746E  		MOV A, #6Eh				 ; 0x6E must be written to IB_CON1 to write to the selected block
 L0537:
-  3E14 B13C  		ACALL L0037
+  3E14 B13C  		ACALL L0037				 ; Write/erase byte
   3E16 75F700		MOV 0F7h, #0h            ; 0F7h = XPAGE
 L0539:
-  3E19 B1A8  		ACALL L0058
+  3E19 B1A8  		ACALL L0058				; Decrement (R7:R6)
   3E1B C1B7  		AJMP L0062
 
 L0535:
   3E1D B4FE07		CJNE A, #0FEh, L0538
+; here if R5 = 0xFE
   3E20 EC    		MOV A, R4
   3E21 F8    		MOV R0, A
   3E22 E5BF  		MOV A, 0BFh              ; 0BFh = IB_DATA
@@ -8479,6 +8505,7 @@ L0535:
 
 L0538:
   3E27 B4FD08		CJNE A, #0FDh, L0540
+; here if R5 = 0xFD
   3E2A EC    		MOV A, R4
   3E2B F8    		MOV R0, A
   3E2C 75F700		MOV 0F7h, #0h ; XPAGE
@@ -8488,7 +8515,9 @@ L0540:
   3E32 C119  		AJMP L0539
 
 L0534:
-  3E34 B4FFE6		CJNE A, #0FFh, L0535
+; code path from @3E0C if R5 is greater than or equal to 0x40
+  3E34 B4FFE6		CJNE A,#0FFh, L0535
+; do something special if it's 0xFF
   3E37 EC    		MOV A, R4
   3E38 33    		RLC A
   3E39 745A  		MOV A, #5Ah
@@ -8646,18 +8675,22 @@ L0866:
   3F16 75C07F		MOV 0C0h, #7Fh           ; 0C0h = P4
   3F19 01EA  		AJMP L0867
 
+; -----------------------------------------
+; Erase all flash from 0x0000 to 0x37FF
+
+ERASE_MAIN_FLASH:
 L0554:
-  3F1B 7438  		MOV A, #38h
+  3F1B 7438  		MOV A, #38h		; start at 0x3800
 L0555:
-  3F1D 14    		DEC A
-  3F1E 54FC  		ANL A, #0FCh
-  3F20 FA    		MOV R2, A
-  3F21 B130  		ACALL L0048
-  3F23 EA    		MOV A, R2
-  3F24 70F7  		JNZ L0555
-  3F26 B1AE  		ACALL L0556
-  3F28 B1AE  		ACALL L0556
-  3F2A C1CF  		AJMP L0007
+  3F1D 14    		DEC A			; decrement page number
+  3F1E 54FC  		ANL A, #0FCh	; mask it down to a sector number
+  3F20 FA    		MOV R2, A		; R2 = sector number to erase
+  3F21 B130  		ACALL L0048		; erase sector
+  3F23 EA    		MOV A, R2		; reload A
+  3F24 70F7  		JNZ L0555		; if we didn't just erase sector 0, go to the next (previous) sector
+  3F26 B1AE  		ACALL L0556		; write 023800 (LJMP 0x3800) to reset vector
+  3F28 B1AE  		ACALL L0556		; do it again, just in case the first try didn't take (because if it didn't, we are a brick)
+  3F2A C1CF  		AJMP L0007		; tail call to L0007
 
   3F2C 12    		DB 012h 
   3F2D 01    		DB 001h 
