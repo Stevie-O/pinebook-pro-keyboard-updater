@@ -1,0 +1,37 @@
+First, this only works from a power-on reset.
+Secondly, most places don't touch the watchdog, so be sure you send multi-byte commands without delay. (Since a watchdog reset is not a power-on reset, I think you then lose your shot.)
+
+P4.5 / "D+" is SCL
+P4.6 / "D-" is SDA
+
+Both pins must be open-collector/open-drain style: weak pull-up, with a transistor connection to ground.
+
+When I say "driven low", I mean that the transistor is turned on, driving the pin to 0V.
+When I say "floating high" I mean that the transistor is turned off; due to the pullup, the pin will float high unless the other side drives it low.
+
+INSTRUCTIONS FOR CONTROL SIDE:
+
+1. Trigger POR with SCL driven low and SDA floating high.
+2. Wait for about 100 microseconds, then let release SCL to float high.  The device should be driving SCL low at this point.
+
+3. REPEAT THE FOLLOWING TWENTY TIMES:
+   1. Let SDA float high	[checked by 3886]
+   2. Wait for SDA to be driven low by the device. [3889]
+   3. Drive SCL low [checked by 388E]
+   4. Wait for SDA to be released by the device [3891]
+   5. Release SCL [checked by 3896]
+
+4. Wait about 300 microseconds [delaying after SDA release (213us) + 38AF
+5. Drive both SDA and SCL low. [checked by 38B1, 38B4]
+6. Wait about 300 microseconds.
+7. Release SDA
+8. Release SCL
+
+At this point, you should be able to clock in a command.  There seems to be four defined:
+
+'!' <low> <byte> - set destination address for 'f' and 'U' commands.
+'!' 0x00  'Z'    - Erase firmware (0x0000-0x37FF)
+'f'              - read one byte of memory (you must clock out the response)
+'U' <8 bytes>    - write exactly 8 bytes to flash
+
+Any other command will cause the bootloader to enter an infinite loop, upon which the watchdog timer will reboot it after 87ms.

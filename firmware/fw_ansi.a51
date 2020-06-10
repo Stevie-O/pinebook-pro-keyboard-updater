@@ -4888,7 +4888,7 @@ L0617:
   19A4 702C  		JNZ L0618
   19A6 F510  		MOV 10h, A
   19A8 F511  		MOV 11h, A
-  19AA 539EF8		ANL 9Eh, #0F8h           ; 9Eh = P4CON
+  19AA 539EF8		ANL 9Eh, #0F8h           ; 9Eh = P4CON => set LED pins to output mode
   19AD 7814  		MOV R0, #14h
   19AF E6    		MOV A, @R0
   19B0 FF    		MOV R7, A
@@ -7329,8 +7329,8 @@ CSEG AT 37FBh
 L0113:
   37FB 0211A3		LJMP L0114 ; this gets overwritten by the flasher maybe?
 
-  37FE 00    		DB 000h 
   37FF 00    		DB 000h 
+  37FE 00    		DB 000h 
   
 ;	entry point after CPU reset
 
@@ -7354,6 +7354,7 @@ L0112:
   3827 01D5  		AJMP L0004
 
 L0581:
+  ; we get here if the
   3829 759E60		MOV 9Eh, #60h ; P4CON = 0x60
   382C 75C07F		MOV 0C0h, #7Fh ; P4 = 0x7F
   382F 9037FE		MOV DPTR, #037FEh
@@ -7362,81 +7363,124 @@ L0581:
   3834 645A  		XRL A, #5Ah
   3836 60EF  		JZ L0112
 L0003:
-  3838 9037FB		MOV DPTR, #037FBh
+  3838 9037FB		MOV DPTR, #037FBh	; check if main firmware seems to be there
   383B E4    		CLR A
   383C 93    		MOVC A, @A+DPTR
-  383D B402E7		CJNE A, #2h, L0112
+  383D B402E7		CJNE A, #2h, L0112	; if it doesn't, jump to L0112
   3840 E4    		CLR A
   3841 F5F0  		MOV B, A
   3843 900000		MOV DPTR, #0000h
   3846 758107		MOV SP, #7h ; SP = 0x07
   3849 F5D0  		MOV PSW, A
-  384B 0237FB		LJMP L0113
+  384B 0237FB		LJMP L0113		; transfer control to main firmware
+
+; --------------------------------------------
+; 		Weird startup subroutine
+;
+; This routine reads the 6 bytes of code memory beginning at 0x3FBA into IRAM 0x20-0x25.
+; It then reads the byte of code memory at 0x37FF into IRAM 0x27.
+; (Since the bootloader doesn't let you write to 0x37FF, I expect that 0x27 will thus always be 0x00.)
 
 L0006:
   384E 903FBA		MOV DPTR, #03FBAh
   3851 7820  		MOV R0, #20h
-  3853 7906  		MOV R1, #6h
+  3853 7906  		MOV R1, #6h					; read 6 bytes
   3855 E5F0  		MOV A, B
 L0579:
-  3857 B4A5FD		CJNE A, #0A5h, L0579
+  3857 B4A5FD		CJNE A, #0A5h, L0579		; infinite loop if B != 0xA5
 L0580:
-  385A E4    		CLR A
-  385B 93    		MOVC A, @A+DPTR
+  385A E4    		CLR A						; clear A
+  385B 93    		MOVC A, @A+DPTR				;
   385C F6    		MOV @R0, A
   385D 08    		INC R0
   385E A3    		INC DPTR
   385F D9F9  		DJNZ R1, L0580
+  ; at this point, we've read 6 bytes from 0x3FBA into RAM starting at 0x20.
+
 L0033:
   3861 E4    		CLR A
-  3862 F51D  		MOV 1Dh, A
+  3862 F51D  		MOV 1Dh, A			; mem[0x1D] = mem[0x1E] = mem[0x1F] = A = 0x00
   3864 F51E  		MOV 1Eh, A
   3866 F51F  		MOV 1Fh, A
   3868 9037FF		MOV DPTR, #037FFh
-  386B 93    		MOVC A, @A+DPTR
-  386C F527  		MOV 27h, A
+  386B 93    		MOVC A, @A+DPTR		; read the byte value at 0x37FF
+  386C F527  		MOV 27h, A			; 
   386E 22    		RET
 
+; --------------------------------------------
+; 		POR check subroutine
+; this routine runs during early startup after a power-on reset
+
 L0002:
-  386F 114E  		ACALL L0006
+  386F 114E  		ACALL L0006				; load some crap into memory
   3871 7414  		MOV A, #14h
+	; 20 tries at this? Huh
 L0582:
-  3873 20C5B3		JB 0C5h, L0581           ; bit.0C5h = P4.5
-  3876 30C6B0		JNB 0C6h, L0581          ; bit.0C6h = P4.6
-  3879 14    		DEC A
-  387A 70F7  		JNZ L0582
-  387C F59E  		MOV 9Eh, A               ; 9Eh = P4CON
-  387E F8    		MOV R0, A
-  387F 7414  		MOV A, #14h
+  3873 20C5B3		JB 0C5h, L0581           ; bit.0C5h = P4.5 [3 cycles]
+  3876 30C6B0		JNB 0C6h, L0581          ; bit.0C6h = P4.6 [3 cycles]
+	; we get here if (P4.5 is LOW and P4.6 is HIGH)
+	; if that's not the case, we went to L0581 and continued the boot process
+  3879 14    		DEC A					 ; 1 cycle
+  387A 70F7  		JNZ L0582				 ; [5 cycles] => check 20, for a total of 100 cycles, or about 17us 
+	; check 20 times to do that
+  387C F59E  		MOV 9Eh, A               ; 9Eh = P4CON => P4CON = 0
+  387E F8    		MOV R0, A				 ; R0 = 0
+
+  387F 7414  		MOV A, #14h				 ; A = 20 (again).  I'm guessing it's another repetition counter.
+  ; big loop (20 iterations)
 L0589:
-  3881 75C0DF		MOV 0C0h, #0DFh          ; 0C0h = P4
+
+  ; --------------
+  ; Drive P4.5 low and allow P4.6 to float HIGH for 5 * 256 = 1280 cycles, or about 213us
+  3881 75C0DF		MOV 0C0h, #0DFh          ; 0C0h = P4 => P4 = 1101_1111 (P4.6=1, P4.5=0, LEDs off)
 L0583:
-  3884 D8FE  		DJNZ R0, L0583
+  3884 D8FE  		DJNZ R0, L0583			 
+  ; --------------
+
+  ;  if P4.6 hasn't gone HIGH yet, go to L0581 and continue the boot process 
   3886 30C6A0		JNB 0C6h, L0581          ; bit.0C6h = P4.6
-  3889 75C0BF		MOV 0C0h, #0BFh          ; 0C0h = P4
+
+  ; --------------
+  ; drive P4.6 low and allow P4.5 to float for another 213us
+  3889 75C0BF		MOV 0C0h, #0BFh          ; 0C0h = P4 => P4 = 1011_1111 (P4.6 = 0, P4.5=1, LEDs off)
 L0584:
-  388C D8FE  		DJNZ R0, L0584
+  388C D8FE  		DJNZ R0, L0584			 ; drive P4.6 low and allow P4.5 to float for another 213us
+  ; --------------
+
+  ; if P4.5 isn't being pulled low, go to L0581 and continue the boot process
   388E 20C598		JB 0C5h, L0581           ; bit.0C5h = P4.5
-  3891 75C0FF		MOV 0C0h, #0FFh ; P4 = 0xFF
+
+
+  ; --------------
+  ; Release P4.6 and P4.5 both for approximately 213us
+  3891 75C0FF		MOV 0C0h, #0FFh ; P4 = 0xFF	; P4.6=1, P4.5=1, LEDs off
 L0585:
   3894 D8FE  		DJNZ R0, L0585
+  ; --------------
+
+  ; if P4.5 hasn't gone high again, go to L0581 and continue the boot process.
   3896 30C590		JNB 0C5h, L0581          ; bit.0C5h = P4.5
-  3899 B40A02		CJNE A, #0Ah, L0586
-  389C F51D  		MOV 1Dh, A
+  
+  
+  ; this is some weird code, but it's clever
+  3899 B40A02		CJNE A, #0Ah, L0586		 ; if A (originally 20) is not equal to 10, go to L0586
+  389C F51D  		MOV 1Dh, A				 ; if (A == 0x0A) mem[0x1D] = 0x0A; This value must be written to IB_CON3 to go from S1 to S2
 L0586:
-  389E B41103		CJNE A, #11h, L0587
-  38A1 751E09		MOV 1Eh, #9h
+  389E B41103		CJNE A, #11h, L0587		 ; if A is not equal to 17, go to L0587
+  38A1 751E09		MOV 1Eh, #9h			 ; if (A == 0x11) mem[0x1E] = 0x09; Hrm. That's the value that must be written to IB_CON4 to go from S2 to S3
 L0587:
-  38A4 B40602		CJNE A, #6h, L0588
-  38A7 F51F  		MOV 1Fh, A
+  38A4 B40602		CJNE A, #6h, L0588		 ; if A is not equal to 6, go to L0588
+  38A7 F51F  		MOV 1Fh, A				 ; if (A == 0x06) mem[0x1F] = 0x06; This is the magic value for IB_CON5 to fully enable programming
 L0588:
-  38A9 759355		MOV 93h, #55h ; CLRWDT = 0x55
-  38AC D5E0D2		DJNZ ACC, L0589
+  38A9 759355		MOV 93h, #55h ; CLRWDT = 0x55 ; clear the watchdog timer
+  38AC D5E0D2		DJNZ ACC, L0589			 ; decrement A and jump (so we have to do this dance twenty times)
+
 L0590:
-  38AF D8FE  		DJNZ R0, L0590
-  38B1 20C505		JB 0C5h, L0591           ; bit.0C5h = P4.5
-  38B4 20C602		JB 0C6h, L0591           ; bit.0C6h = P4.6
-  38B7 21A6  		AJMP L0592
+  38AF D8FE  		DJNZ R0, L0590			 ; 213us delay
+
+  38B1 20C505		JB 0C5h, L0591           ; bit.0C5h = P4.5 => if P4.5 is not being driven low, jump to L0591
+  38B4 20C602		JB 0C6h, L0591           ; bit.0C6h = P4.6 => if P4.6 is not being driven low, jump to L0591
+  38B7 21A6  		AJMP L0592				 ; jump to prep work for I2C command loop
 
 L0591:
   38B9 758127		MOV SP, #27h ; SP = 0x27
@@ -7448,9 +7492,9 @@ L0591:
   38C8 B1BE  		ACALL L0562			; write 0x5A to address 0x37FE
 L0609:
   38CA C2C5  		CLR 0C5h                 ; bit.0C5h = P4.5
-  38CC D1C5  		ACALL L0111
+  38CC D1C5  		ACALL L0111				 ; a delaying routine
   38CE D2C5  		SETB 0C5h                ; bit.0C5h = P4.5
-  38D0 D1C5  		ACALL L0111
+  38D0 D1C5  		ACALL L0111				 ; delaying routine
   38D2 30C5F5		JNB 0C5h, L0609          ; bit.0C5h = P4.5
   
 ; this routine is reached after CPU reset in the following condition:
@@ -7479,7 +7523,18 @@ L0609:
 ; - Firmware update code allows flash writes (but not erasures, so this is write-once-only) to 0x3FC0..0x3FFF.
 ;   (This may have been intended to support injecting a serial number or something.)
 ;   See L0039; the last step is a fall-through for addresses greater than 0x3FBF and less than 0x4000.
-; 
+; - Writes intended for certain addresses are remapped:
+;	0x0000 -> 0x37FB
+;	0x0001 -> 0x37FC
+;	0x0002 -> 0x37FD
+;	0x37FB..0x3FFF -> write attempts are ignored
+;	0xFCnn -> 0x3FC0 | nn (e.g. 0xFC00 to 0x3FC0, 0xFC01 to 0x3FC1, 0xFC10 to 0x3FD0)
+
+; BOOTLOADER Register/Memory map:
+;		R4:			Destination address (low)
+;		R5:			Destination address (high)
+;		0x08-0x0F:	Receive buffer for current packet
+;		0x12:       Address mapping override; if set to 'A', prevents write attempts from being remapped or ignored (yikes)
 
 L0004:
   38D5 759355		MOV 93h, #55h ; CLRWDT = 0x55  - reset watchdog
@@ -7553,10 +7608,11 @@ L0091:
   391E 43EF04		ORL 0EFh, #4h ; RXFLG0 |= 0x04
   3921 53EFFE		ANL 0EFh, #0FEh ; RXFLG0 &= 0xFE
   3924 E5EF  		MOV A, 0EFh ; read from RXFLG0
-  3926 20E415		JB ACC.4, L0015
-  3929 71E5  		ACALL L0016
+  3926 20E415		JB ACC.4, L0015		; check R0_OW
+  3929 71E5  		ACALL L0016			; reset command receive state
   392B 5164  		ACALL L0017
-  392D 20330E		JB 33h, L0015
+  392D 20330E		JB 33h, L0015		; since we bail if R0_OW is set, which indicates corruption, I bet bit 33h is bad here
+										; bit 33h is (mem[0x26] & 0x08)
   3930 53EFFB		ANL 0EFh, #0FBh ; RXFLG0 &= 0xFB
   3933 01FC  		AJMP L0018
 
@@ -7624,7 +7680,7 @@ L0092:
   3980 43EF04		ORL 0EFh, #4h ; RXFLG0 |= 0x04	; OUT0ENB=1: The SH68F83 will respond OUT0 token with NAK.
 ; I'm betting that the OUT0ENB flag is being used as flow-control here.
 
-  3983 203104		JB 31h, L0105					; looks like this is bit 1 of mem[0x26]
+  3983 203104		JB 31h, L0105					; looks like this is bit 1 (0x02) of mem[0x26]
   3986 E5EE  		MOV A, 0EEh ; read from RXCNT0 (number of bytes in RX FIFO)
   3988 700E  		JNZ L0106
   
@@ -7653,66 +7709,103 @@ L0106:
 
 L0103:
   39A4 01FC  		AJMP L0018
+  
+; --------------------------------------------
+; this seems to enable doing firmware writes
+; over what are normally the USB D+/D- pins,
+; using the I2C protocol.
 
 L0592:
   39A6 C2C6  		CLR 0C6h                 ; bit.0C6h = P4.6
   39A8 759403		MOV 94h, #3h ; PREWDT = 0x03
   39AB 758127		MOV SP, #27h ; SP = 0x27
-  39AE 5130  		ACALL L0008
+  39AE 5130  		ACALL L0008				; set up various interrupts and stuff
   39B0 751205		MOV 12h, #5h
+
+  ; Command set:
+  ;	 	'!' 0x00 'Z' => erase firmware
+  ;		'U' <exactly 8 bytes> => Write to firmware
+  ;		'f' => Read firmware (device reads 1 byte)
+  ;		
+
 L0595:
-  39B3 75C0FF		MOV 0C0h, #0FFh ; P4 = 0xFF 
+BOOTLOADER_I2C_COMMAND_RX_LOOP:
+  39B3 75C0FF		MOV 0C0h, #0FFh ; P4 = 0xFF => I assume this is putting both pins into high-impedance mode with an internal pullup
+
+  ; Looks like a synchronization process.
+  ; Sender is expected to send an endless stream of 1s until an acknowledgement is received.
+  ; Then it starts sending commands.
+  
+  ; --- wait for I2C clock to go low
 L0593:
   39B6 759355		MOV 93h, #55h ; CLRWDT = 0x55
   39B9 20C5FA		JB 0C5h, L0593           ; bit.0C5h = P4.5
-  39BC 30C607		JNB 0C6h, L0594          ; bit.0C6h = P4.6
-  39BF C2C6  		CLR 0C6h                 ; bit.0C6h = P4.6
+  ; -- end of wait
+  
+  39BC 30C607		JNB 0C6h, L0594          ; Jump if the bit just received is 0
+  39BF C2C6  		CLR 0C6h                 ; bit.0C6h = P4.6 => write P4.6 low (I think?)  I think this will 
+  
+  ; --- wait for I2C clock to go high; once it does, go to L0595
 L0596:
-  39C1 20C5EF		JB 0C5h, L0595           ; bit.0C5h = P4.5
+  39C1 20C5EF		JB 0C5h, L0595           ; bit.0C5h = P4.5 => if (P4.5 == 1) then go to L0595
   39C4 21C1  		AJMP L0596
+  ; --- end of wait
 
 L0594:
   39C6 7402  		MOV A, #2h
-  39C8 5122  		ACALL L0597
+  39C8 5122  		ACALL L0597				; Read a 7-bit value from the I2C master
   39CA B43310		CJNE A, #33h, L0598
-  39CD 511D  		ACALL L0599
-  39CF FC    		MOV R4, A
-  39D0 511D  		ACALL L0599
-  39D2 FD    		MOV R5, A
-  39D3 BD5ADD		CJNE R5, #5Ah, L0595
+	; here if A = 0x33 ('!')
+  39CD 511D  		ACALL L0599				; read an 8-bit value from I2C
+  39CF FC    		MOV R4, A				; destination address low
+  39D0 511D  		ACALL L0599				; read an 8-bit value from I2C
+  39D2 FD    		MOV R5, A				; destination address high
+  39D3 BD5ADD		CJNE R5, #5Ah, L0595	; if (R5 != 'Z') L0595
+	; here if A = 0x5A ('Z')
   39D6 EC    		MOV A, R4
   39D7 70DA  		JNZ L0595
-  39D9 F11B  		ACALL L0554
+  39D9 F11B  		ACALL L0554			; erase main flash area (0x0003-0x37FF)
   39DB 21B3  		AJMP L0595
 
 L0598:
-  39DD B45516		CJNE A, #55h, L0601
-  39E0 7908  		MOV R1, #8h
-  39E2 7A08  		MOV R2, #8h
+  39DD B45516		CJNE A, #55h, L0601		; 'U'
+
+  ; read 8 bytes from I2C
+
+  39E0 7908  		MOV R1, #8h				; receive buffer
+  39E2 7A08  		MOV R2, #8h				; bytes left
 L0602:
-  39E4 511D  		ACALL L0599
-  39E6 F7    		MOV @R1, A
+  39E4 511D  		ACALL L0599				; read 8-bit value from I2C
+  39E6 F7    		MOV @R1, A				; 
   39E7 09    		INC R1
   39E8 DAFA  		DJNZ R2, L0602
+  
+  ; write those 8 bytes to flash
+  
   39EA 7908  		MOV R1, #8h
   39EC 7A08  		MOV R2, #8h
 L0603:
   39EE E7    		MOV A, @R1
-  39EF B1C4  		ACALL L0529
+  39EF B1C4  		ACALL L0529				; write to flash (with remapping)
   39F1 09    		INC R1
   39F2 DAFA  		DJNZ R2, L0603
-  39F4 21B3  		AJMP L0595
+  39F4 21B3  		AJMP L0595				; back to main
 
 L0601:
-  39F6 B466FD		CJNE A, #66h, L0601
-  39F9 9137  		ACALL L0031
+  39F6 B466FD		CJNE A, #66h, L0601		; 'f'
+	; and, uh, if it's not 'f', it goes into an infinite loop somehow?
+; 'f' command
+  39F9 9137  		ACALL L0031				; A = (mem[0x27] ^ 0xA5)
 L0604:
-  39FB 70FE  		JNZ L0604
-  39FD 7A08  		MOV R2, #8h
+  39FB 70FE  		JNZ L0604				; if result is nonzero, loop until that changes somehow (WTF?)
+
+; I haven't examined this closely, but it looks like an I2C byte send (as slave).
+
+  39FD 7A08  		MOV R2, #8h				; 8 bits
 L0608:
-  39FF D18D  		ACALL L0056
+  39FF D18D  		ACALL L0056				; read byte from memory, store in A
   3A01 759355		MOV 93h, #55h ; CLRWDT = 0x55
-  3A04 D3    		SETB C
+  3A04 D3    		SETB C					; set carry flag
   3A05 75C0FF		MOV 0C0h, #0FFh ; P4 = 0xFF
 L0605:
   3A08 30C5FD		JNB 0C5h, L0605          ; bit.0C5h = P4.5
@@ -7728,20 +7821,59 @@ L0607:
   3A19 DAE4  		DJNZ R2, L0608
   3A1B 21B3  		AJMP L0595
 
+; --------------------------------------------
+; a strange routine called by a couple of places,
+; including one relating to erasing firmware.
+;
+; I think this is used to receive a byte, acting as an I2C slave device, with
+; "D+" as clock and "D-" as data.
+
 L0599:
-  3A1D 75C0FF		MOV 0C0h, #0FFh ; P4 = 0xFF
-  3A20 7401  		MOV A, #1h
+  3A1D 75C0FF		MOV 0C0h, #0FFh ; P4 = 0xFF	=> turn off the LEDs
+  3A20 7401  		MOV A, #1h		; A = 0x01
+  ; fall through to L0597, which is called directly as a subroutine
+
+; --------------------------------------------
+; a VERY strange routine
+; It does some strange things involving the USB data pins D+ (P4.5) and D- (P4.6).
+;	The logic appears to be thus:
+;		do {
+;			while (P4.5 != 0) ; // wait for D+ to go high
+;			while (P4.5 == 0) ; // wait for D+ to go low
+;			var shift_in = P4.6; 	// read D- line
+;			var shift_out = (A >> 8);
+;			A = (A << 7) | shift_in;
+;		while (shift_out == 0);
+;		P4.6 = 0;
+;
+;  Hrmmmmmm.
+;  This looks suspiciously similar to an I2C receive operation (as an I2C slave.)
+; P4.5 is SCL and P4.6 is SDA; that "P4.6 = 0" at the end would be an ACK.
+
+ ; while (P4.5 != 0) ;
 L0597:
   3A22 30C5FD		JNB 0C5h, L0597          ; bit.0C5h = P4.5
+	; this is odd. P4.5 and P4.6 are the USB data pins.  I gotta figure out what P4CON.6 and USB_CON are at this point
+	; The datasheet suggests that these aren't even readable if USB_CON=1...
+												
+ ; while (P4.5 == 0) ;
 L0600:
   3A25 20C5FD		JB 0C5h, L0600           ; bit.0C5h = P4.5
-  3A28 A2C6  		MOV C, 0C6h              ; bit.0C6h = P4.6
-  3A2A 33    		RLC A
-  3A2B 50F5  		JNC L0597
-  3A2D C2C6  		CLR 0C6h                 ; bit.0C6h = P4.6
-  3A2F 22    		RET
+  
+  ; so we've just waited for D+ to go LOW, and then for it to go HIGH.
+  ; I find it interesting that we didn't clear the watchdog timer here.
+
+  3A28 A2C6  		MOV C, 0C6h              ; bit.0C6h = P4.6 => value of "D-" pin
+  3A2A 33    		RLC A					 ; shift A left; A's low-order bit becomes C; old high-order bit is stored C
+  3A2B 50F5  		JNC L0597				 ; if we shifted a 0 out, go back to the top
+  3A2D C2C6  		CLR 0C6h                 ; bit.0C6h = P4.6 => value of "D-" pin
+  3A2F 22    		RET						 ; return
+  
+; --------------------------------------------
+; Initialize various SFRs, interrupts, etc.
 
 L0008:
+BIG_INIT_ROUTINE:
   3A30 E4    		CLR A
   3A31 F596  		MOV 96h, A               ; 96h = MODE_FG
   3A33 F5F2  		MOV 0F2h, A ; DADDR = 
@@ -7773,54 +7905,64 @@ L0515:
   3A63 22    		RET
 
 L0017:
-  3A64 7B00  		MOV R3, #0h
-  3A66 E508  		MOV A, 8h
+  3A64 7B00  		MOV R3, #0h			; R3 = 0
+  3A66 E508  		MOV A, 8h			; A = rxpacket[0] -> setup packet
   3A68 7012  		JNZ L0020
-  3A6A D230  		SETB 30h
-  3A6C E509  		MOV A, 9h
+	; here if rxpacket[0] == 0, which means: Host-to-device, Standard, Device)
+  3A6A D230  		SETB 30h			; mem[0x26] |= 0x01
+  3A6C E509  		MOV A, 9h			; A = rxpacket[1] (bRequest)
   3A6E B40504		CJNE A, #5h, L0021
+		; 0x05: SET_ADDRESS
   3A71 7401  		MOV A, #1h
   3A73 4187  		AJMP L0022
 
 L0021:
   3A75 B4095D		CJNE A, #9h, L0023
-  3A78 F522  		MOV 22h, A
+		; 0x09: SET_CONFIGURATION
+  3A78 F522  		MOV 22h, A			; mem[0x22] = 0x09
   3A7A 4186  		AJMP L0024
 
 L0020:
-  3A7C 20E759		JB ACC.7, L0025
-  3A7F D230  		SETB 30h
-  3A81 E509  		MOV A, 9h
+  3A7C 20E759		JB ACC.7, L0025		; if (device-to-host) L0025
+  3A7F D230  		SETB 30h			; mem[0x26] |= 0x01
+  3A81 E509  		MOV A, 9h			; A = rxpacket[1] (bRequest)
   3A83 B40A09		CJNE A, #0Ah, L0026
+	; 0x0A = GET_INTERFACE
 L0024:
   3A86 E4    		CLR A
 L0022:
   3A87 8BEB  		MOV 0EBh, R3             ; 0EBh = TXCNT0
-  3A89 F510  		MOV 10h, A
+  3A89 F510  		MOV 10h, A				 ; mem[0x10] = A (processing state machine)
   3A8B 43EC01		ORL 0ECh, #1h ; TXFLG0 = 0x01
   3A8E 22    		RET
 
 L0026:
   3A8F B40943		CJNE A, #9h, L0023
-  3A92 E508  		MOV A, 8h
+	; 0x09: SET_CONFIGURATION
+  3A92 E508  		MOV A, 8h				; rxpacket[0] (bmRequestType)
   3A94 B4213E		CJNE A, #21h, L0023
-  3A97 E50B  		MOV A, 0Bh
-  3A99 B40204		CJNE A, #2h, L0027
-  3A9C 7402  		MOV A, #2h
-  3A9E 4187  		AJMP L0022
+	; bmRequestType = 0x21: Host-to-device, Vendor-specific, Interface
+  3A97 E50B  		MOV A, 0Bh				; rxpacket[3] (wValueH)
+  3A99 B40204		CJNE A, #2h, L0027		;
+	; here if wValueH == 0x02
+  3A9C 7402  		MOV A, #2h				;
+  3A9E 4187  		AJMP L0022				; tail call to set processing state machine to state 2
 
 L0027:
   3AA0 B40332		CJNE A, #3h, L0023
+  ; here if wValueH == 0x03
   3AA3 9100  		ACALL L0028
-  3AA5 B4050C		CJNE A, #5h, L0029
-  3AA8 BE062A		CJNE R6, #6h, L0023
-  3AAB BF0027		CJNE R7, #0h, L0023
-  3AAE 7404  		MOV A, #4h
-  3AB0 7E04  		MOV R6, #4h
+  3AA5 B4050C		CJNE A, #5h, L0029		; if (wValueL != 0x05) L0029
+	; SO: wValue == 0x0305.  
+  3AA8 BE062A		CJNE R6, #6h, L0023		; message must be exactly 6 bytes
+  3AAB BF0027		CJNE R7, #0h, L0023		;
+  3AAE 7404  		MOV A, #4h				; looks like this switches to state 4
+  3AB0 7E04  		MOV R6, #4h				; TODO: figure out what R6 is doing here
   3AB2 4187  		AJMP L0022
 
 L0029:
   3AB4 B4060C		CJNE A, #6h, L0030
+	; here if wValue == 0x0306
   3AB7 BE021B		CJNE R6, #2h, L0023
   3ABA BF0818		CJNE R7, #8h, L0023
   3ABD 7406  		MOV A, #6h
@@ -7829,17 +7971,21 @@ L0029:
 
 L0030:
   3AC3 B4410F		CJNE A, #41h, L0023
+	; here if wValue == 0x0341
   3AC6 B5250C		CJNE A, 25h, L0023
+    ; just what _is_ this nonsense? It doesn't seem to serve any useful purpose.
+	; Rather, it looks like someone put their name in the firmware and tried very hard to make sure
+	; that if it was deleted, things would stop working.
   3AC9 9137  		ACALL L0031
   3ACB 6002  		JZ L0032
   3ACD 1161  		ACALL L0033
 L0032:
   3ACF B119  		ACALL L0034
   3AD1 7408  		MOV A, #8h
-  3AD3 4187  		AJMP L0022
+  3AD3 4187  		AJMP L0022		; enter state 8
 
 L0023:
-  3AD5 D233  		SETB 33h
+  3AD5 D233  		SETB 33h		; mem[0x26] |= 0x08.  This changes behavior in setup packet handling
   3AD7 22    		RET
 
 L0025:
@@ -8003,6 +8149,7 @@ L0107:
   3BAF B40220		CJNE A, #2h, L0109		; if (mem[0x10] != 0x02) L0109
 
 ; case 2:
+;  (SET_CONFIGURATION to 0x0302)
   3BB2 E509  		MOV A, 9h				; A = rxpacket[1]
   3BB4 F4    		CPL A					; A = ~rxpacket[1]
   3BB5 5511  		ANL A, 11h				; A = ~rxpacket[1] & mem[0x11]
@@ -8027,6 +8174,7 @@ L0574:
 L0109:
   3BD2 B40406		CJNE A, #4h, L0516
 ; case 4:
+;  (SET_CONFIGURATION to 0x0305)
   3BD5 910D  		ACALL L0517
   3BD7 7B00  		MOV R3, #0h
   3BD9 4186  		AJMP L0024
@@ -8034,10 +8182,12 @@ L0109:
 L0516:
   3BDB B40602		CJNE A, #6h, L0569
 ; case 6:
+;  (SET_CONFIGURATION to 0x0308)
   3BDE 81D7  		AJMP L0570
 
 L0569:
   3BE0 B408EE		CJNE A, #8h, L0574
+; case 8:
   3BE3 A101  		AJMP L0575
 
 L0016:
@@ -8048,30 +8198,32 @@ L0016:
   3BEE 53EFFD		ANL 0EFh, #0FDh ; set RXFLG0 &
 L0019:
   3BF1 E4    		CLR A
-  3BF2 F510  		MOV 10h, A
-  3BF4 F512  		MOV 12h, A
-  3BF6 F526  		MOV 26h, A
-  3BF8 D237  		SETB 37h
+  3BF2 F510  		MOV 10h, A				; mem[0x10] (command-processing state) = 0
+  3BF4 F512  		MOV 12h, A				; mem[0x12] = 0
+  3BF6 F526  		MOV 26h, A				; mem[0x26] = 0.  Odd.  This'd be more efficient -- by one byte -- as MOV 26h, #80h. (752680)
+  3BF8 D237  		SETB 37h				; mem[0x26] |= 0x80.  This is used to indicate that we've not yet received the first packet of a multi-packet report.
   3BFA 22    		RET
 
 L0083:
-  3BFB AC14  		MOV R4, 14h
-  3BFD AD15  		MOV R5, 15h
+  3BFB AC14  		MOV R4, 14h				; R4 = mem[0x14]
+  3BFD AD15  		MOV R5, 15h				; R5 = mem[0x15]
   3BFF 22    		RET
 
 L0028:
-  3C00 AC0C  		MOV R4, 0Ch
-  3C02 AD0D  		MOV R5, 0Dh
-  3C04 AE0E  		MOV R6, 0Eh
-  3C06 AF0F  		MOV R7, 0Fh
-  3C08 E50A  		MOV A, 0Ah
-  3C0A F512  		MOV 12h, A
+  3C00 AC0C  		MOV R4, 0Ch				; R4 = rxpacket[4] (wIndexL)
+  3C02 AD0D  		MOV R5, 0Dh				; R5 = rxpacket[5] (wIndexH) - note that these will be overwritten later
+  3C04 AE0E  		MOV R6, 0Eh				; R6 = rxpacket[6] (wLengthL)
+  3C06 AF0F  		MOV R7, 0Fh				; R7 = rxpacket[7] (wLengthH)
+  3C08 E50A  		MOV A, 0Ah				; A = rxpacket[2] (wValueL)
+  3C0A F512  		MOV 12h, A				; mem[0x12] = rxpacket[2] (not sure why they didn't use MOV iram, iram for this)
+                                            ; however, at least one caller uses the value of A
 L0518:
   3C0C 22    		RET
 
 ; ------------------------------------------
 ;
 ; some sort of handler for received packets (state 4)
+; state 4 means we got a SET_CONFIGURATION to 0x0305
 
 L0517:
 ; called only by case 4 elsewhere
@@ -8117,51 +8269,57 @@ L0031:
   3C3B 22    		RET
 
 L0521:
+; state 4 continuation
   3C3C B45706		CJNE A, #57h, L0524
-; rxpacket[1] == 'W'
+; prev_cmd/rxpacket[1] == 'W'
   3C3F 9137  		ACALL L0031
   3C41 70F0  		JNZ L0523
   3C43 812A  		AJMP L0522
 
 L0524:
   3C45 B45609		CJNE A, #56h, L0525
-; rxpacket[1] == 'V'
+; prev_cmd/rxpacket[1] == 'V'
   3C48 912A  		ACALL L0522
   3C4A EC    		MOV A, R4
   3C4B 4D    		ORL A, R5
   3C4C 70E5  		JNZ L0523
-  3C4E F518  		MOV 18h, A
+  3C4E F518  		MOV 18h, A					; mem[0x18] = (R4 | R5). WTF is that doing?
   3C50 22    		RET
 
 L0525:
+; state 4 continuation
   3C51 B47727		CJNE A, #77h, L0526
 ; rxpacket[1] == 'w'
-  3C54 E513  		MOV A, 13h
+  3C54 E513  		MOV A, 13h				; prev_cmd
   3C56 B457B3		CJNE A, #57h, L0518
 ; prev_cmd == 'W'
-  3C59 71FB  		ACALL L0083
-  3C5B 7A04  		MOV R2, #4h
-  3C5D 790A  		MOV R1, #0Ah
+  3C59 71FB  		ACALL L0083				; reload destination address R5:R4 from mem[0x15:0x14]
+  3C5B 7A04  		MOV R2, #4h				; 4 bytes(!?)
+  3C5D 790A  		MOV R1, #0Ah			; starting at rxpacket[2]
+  
+  
+; Write R2 bytes to flash, starting from address R1
 L0530:
 ; state 6 jumps in here from 
   3C5F EE    		MOV A, R6
   3C60 4F    		ORL A, R7
-  3C61 600B  		JZ L0527
-  3C63 E513  		MOV A, 13h
-  3C65 B45708		CJNE A, #57h, L0528
-  3C68 E7    		MOV A, @R1
-  3C69 B1C4  		ACALL L0529
+  3C61 600B  		JZ L0527				; if (R7:R6 == 0) L0527
+  3C63 E513  		MOV A, 13h				; prev_cmd
+  3C65 B45708		CJNE A, #57h, L0528		; if (prev_cmd != 'W') L0528
+		; 'W'
+  3C68 E7    		MOV A, @R1				; read next byte from buffer
+  3C69 B1C4  		ACALL L0529				; write to flash (with remapping)
 L0549:
-  3C6B 09    		INC R1
-  3C6C DAF1  		DJNZ R2, L0530
+  3C6B 09    		INC R1					; forward to the next byte pointer
+  3C6C DAF1  		DJNZ R2, L0530			; decrement R2 and, if not zero, repeat
 L0527:
-  3C6E 812E  		AJMP L0084
+  3C6E 812E  		AJMP L0084				; tail call to save R5:R4 off for the next operation
 
 L0528:
   3C70 D18D  		ACALL L0056
   3C72 67    		XRL A, @R1
   3C73 6004  		JZ L0548
-  3C75 74EE  		MOV A, #0EEh ; read from RXCNT0
+  3C75 74EE  		MOV A, #0EEh ; A = 0xEE
   3C77 4218  		ORL 18h, A
 L0548:
   3C79 80F0  		SJMP L0549
@@ -8178,38 +8336,43 @@ L0526:
   3C8F B44102		CJNE A, #41h, L0550 ; 'A'
   3C92 F525  		MOV 25h, A
 L0550:
-  3C94 54DF  		ANL A, #0DFh
-  3C96 B4453D		CJNE A, #45h, L0551	; 'E'? (but we just did a bitwise op)
-  3C99 E50A  		MOV A, 0Ah
+  3C94 54DF  		ANL A, #0DFh		; 1101 1111 -> crude tolower()
+  3C96 B4453D		CJNE A, #45h, L0551	; if (A != 'E') return
+  3C99 E50A  		MOV A, 0Ah			; rxpacket[2]
   3C9B B4450D		CJNE A, #45h, L0552 ; 'E'
-  3C9E 630B4F		XRL 0Bh, #4Fh		; 'O'
-  3CA1 630C4C		XRL 0Ch, #4Ch		; 'L'
-  3CA4 630D43		XRL 0Dh, #43h		; 'C'
+  3C9E 630B4F		XRL 0Bh, #4Fh		; 'O'		rxpacket[3] should have been 'E'
+  3CA1 630C4C		XRL 0Ch, #4Ch		; 'L'		rxpacket[4] should have been 'E'
+  3CA4 630D43		XRL 0Dh, #43h		; 'C'		rxpacket[5] should have been 'E'
   3CA7 91CC  		ACALL L0553
-  3CA9 E11B  		AJMP L0554
+  3CA9 E11B  		AJMP L0554			; (tail call) erase main flash area (0x0003-0x37FF)
 
 L0552:
   3CAB B45A08		CJNE A, #5Ah, L0564
+ ; 'Z' => write byte to 0x37FE
   3CAE 7CFE  		MOV R4, #0FEh		
 L0566:
   3CB0 7D37  		MOV R5, #37h
-  3CB2 E50B  		MOV A, 0Bh		
-  3CB4 A1BE  		AJMP L0562			; write mem[0x0B] to 0x37FE
+  3CB2 E50B  		MOV A, 0Bh			; A = rxpacket[3]
+  3CB4 A1BE  		AJMP L0562			; write rxpacket[3] to 0x37FE
 
 L0564:
   3CB6 B4A507		CJNE A, #0A5h, L0565
-  3CB9 B5271A		CJNE A, 27h, L0551
-  3CBC 7CFF  		MOV R4, #0FFh
+ ; 0xA5 => write byte to 0x37FF, but only if mem[0x27] == 0xA5
+  3CB9 B5271A		CJNE A, 27h, L0551	; if (mem[0x27] != 0xA5) return
+  3CBC 7CFF  		MOV R4, #0FFh		
   3CBE 81B0  		AJMP L0566
 
 L0565:
   3CC0 B4FF06		CJNE A, #0FFh, L0567
-  3CC3 9137  		ACALL L0031
-  3CC5 700F  		JNZ L0551
-  3CC7 A12C  		AJMP L0568
+  3CC3 9137  		ACALL L0031			; A = (mem[0x27] ^ 0xA5)
+  3CC5 700F  		JNZ L0551			; if (mem[0x27] != 0xA5) return
+  3CC7 A12C  		AJMP L0568			; do some undocumented black magic
 
 L0567:
   3CC9 B4050A		CJNE A, #5h, L0551
+  ; 0x05
+  ;				mem[0x1D:0x1F] = rxpacket[3:5]
+  ; these are the parameters used to set up IB_CONx
 L0553:
   3CCC 850B1D		MOV 1Dh, 0Bh
   3CCF 850C1E		MOV 1Eh, 0Ch
@@ -8220,6 +8383,7 @@ L0551:
   3CD6 22    		RET
 
 ; entirety of handler for packet received in state 6
+; state 6 is SET_CONFIGURATION 0x0306
 
 L0570:
   3CD7 E513  		MOV A, 13h				; A = prevcmd (set by state 4)
@@ -8231,6 +8395,15 @@ L0570:
 //	if (mem[0x26] & 0x80) { @3CE1-@3CE2 }
 //	else { (L0572) @3CE9-@3CFB }
 //  (L0573) @3CE4-@3CE7
+
+; Okay, I think I've figured out what's going on here
+; Each packet is 8 bytes.
+; The FIRST packet of data has the report ID (0x06) and the command indicator (0x77/'w'), which is 2 bytes.
+;   Therefore, we need to program 6 bytes starting with rxpacket[2].
+; All subsequent packets are raw data.
+;   Therefore, we need to program 8 bytes starting with rxpacket[0].
+; mem[0x26] high bit must be a "we already processed the first packet" indicator.
+
 
   3CE1 EB    		MOV A, R3				; A = R3
   3CE2 7908  		MOV R1, #8h				; R1 = 8
@@ -8246,7 +8419,7 @@ L0573:
 L0572:
   3CE9 E509  		MOV A, 9h				; A = rxpacket[1]
   3CEB 6420  		XRL A, #20h				; XOR it with 0x20
-  3CED B5130D		CJNE A, 13h, L0571		; so: if (rxpacket[1] != '3') bail
+  3CED B5130D		CJNE A, 13h, L0571		; so: if (rxpacket[1] != prev_cmd) bail
   3CF0 E508  		MOV A, 8h				; A = rxpacket[0]
   3CF2 B40608		CJNE A, #6h, L0571		; if (rxpacket[0) != 0x06) bail
 											; note that state 4 requires 0x05, while state 6 requires 0x06
@@ -8254,7 +8427,7 @@ L0572:
   3CF7 EB    		MOV A, R3				; A = R3 (matching @3CE1 from the other code path)
   3CF8 C3    		CLR C					; clear carry to set up subtraction
   3CF9 9402  		SUBB A, #2h				; A -= 2
-  3CFB 50E7  		JNC L0573				; if (A < 0) return, else continue from L0573
+  3CFB 50E7  		JNC L0573				; if (A < 0) { clear prevmd and return }, else continue from L0573
 L0571:
   3CFD 751300		MOV 13h, #0h			; prevcmd = 0x00
   3D00 22    		RET
@@ -8263,12 +8436,12 @@ L0575:
 ; case 8:
   3D01 EB    		MOV A, R3				; A = R3
   3D02 6014  		JZ L0035
-  3D04 B40800		CJNE A, #8h, L0576		; if (R3 == 0x08) { goto L0576 } else { goto L0576 }. Awesome.
+  3D04 B40800		CJNE A, #8h, L0576		; this is doing: if (A > 0x08) A = 0x08
 L0576:
-  3D07 4002  		JC L0577				; no idea what set up C for us here.  Worrisome.
-  3D09 7408  		MOV A, #8h				; A = 8 if carry clear
+  3D07 4002  		JC L0577				;
+  3D09 7408  		MOV A, #8h				;
 L0577:
-  3D0B FA    		MOV R2, A				; R2 = A (which is either R3, if carry was set, or 8, if carry was clear)
+  3D0B FA    		MOV R2, A				; R2 = number of bytes to write
   3D0C 7908  		MOV R1, #8h				; R1 = &rxpacket[0]
   
   ; top of loop
@@ -8277,7 +8450,7 @@ L0578:
   3D0F 4F    		ORL A, R7				; A |= R7
   3D10 6006  		JZ L0035				; soo if (R6 == 0 && R7 == 0) L0035
   3D12 E7    		MOV A, @R1				; A = *R1
-  3D13 B1C4  		ACALL L0529
+  3D13 B1C4  		ACALL L0529				; write to flash (with remapping)
   3D15 09    		INC R1
   3D16 DAF6  		DJNZ R2, L0578
 L0035:
@@ -8406,7 +8579,7 @@ L0045:
 ;  Decrements a 16-bit value stored LSB_first in (R7:R6)
 
 L0058:
-DECREMENT_16BIT_R7_R6:
+DECREMENT_16BIT_R7R6:
   3DA8 EE    		MOV A, R6				 ; Okay, we're decrementing a 16-bit value stored in (R7:R6)
   3DA9 7001  		JNZ L0080
   3DAB 1F    		DEC R7
@@ -8423,7 +8596,7 @@ L0556:
   3DB0 7C01  		MOV R4, #1h
   3DB2 7438  		MOV A, #38h		; write 0x38 to 0x0001
   3DB4 B1BE  		ACALL L0562
-  3DB6 7400  		MOV A, #0h		; write 0x00 to 0x0000
+  3DB6 7400  		MOV A, #0h		; write 0x00 to 0x0002
   3DB8 B1BE  		ACALL L0562
   3DBA 7C00  		MOV R4, #0h		; write 0x02 to 0x0000 - LJMP 0x3800
   3DBC 7402  		MOV A, #2h
@@ -8432,21 +8605,28 @@ L0562:
   3DC0 8DF7  		MOV 0F7h, R5 ; XPAGE
   3DC2 C110  		AJMP L0563
 
+; ------------------------------------------------
+; Write the value stored in the accumulator (A/ACC) to flash.
+; 
+
 L0529:
-  3DC4 F5BF  		MOV 0BFh, A              ; 0BFh = IB_DATA
+WRITE_BYTE_TO_FLASH_WITH_REMAPPING:
+  3DC4 F5BF  		MOV 0BFh, A              ; 0BFh = IB_DATA => IB_DATA = A
   3DC6 E512  		MOV A, 12h				 ; A = mem[0x12]
   3DC8 B44102		CJNE A, #41h, L0531		 ; if (mem[0x12] != 'A') L0531
-  3DCB C108  		AJMP L0532
+  3DCB C108  		AJMP L0532				 ; write byte to flash (so, if mem[0x12] == 'A', we disable all remapping)
 
 L0531:
-  3DCD BDFC0A		CJNE R5, #0FCh, L0541
-  3DD0 75F73F		MOV 0F7h, #3Fh ; XPAGE
-  3DD3 EC    		MOV A, R4
-  3DD4 44C0  		ORL A, #0C0h
+  3DCD BDFC0A		CJNE R5, #0FCh, L0541	 ; if (R5 != 0xFC) L0541
+  3DD0 75F73F		MOV 0F7h, #3Fh ; XPAGE	 ; okay this is odd
+  3DD3 EC    		MOV A, R4				 ; this maps writes to address 0b1111_1100_aaaa_aaaa to 0b0011_1111_11aa_aaaa
+  3DD4 44C0  		ORL A, #0C0h			 ; so e.g. writes to 0xFC01 are remapped to 0x3FC1; 0xFC10 remaps to 0x3FD0
+											 ; this'd let you write a serial number or something to the device
   3DD6 F5BE  		MOV 0BEh, A              ; 0BEh = IB_OFFSET
-  3DD8 C112  		AJMP L0542
+  3DD8 C112  		AJMP L0542				 ; write byte to flash
 
 L0541:
+REMAP_ADDRESS_0000_TO_3F7B:
   3DDA ED    		MOV A, R5				; (R5 = destination address high byte)
   3DDB 700F  		JNZ L0543
   3DDD EC    		MOV A, R4				; (R4 = destination address low byte)
@@ -8492,7 +8672,7 @@ L0537:
   3E16 75F700		MOV 0F7h, #0h            ; 0F7h = XPAGE
 L0539:
   3E19 B1A8  		ACALL L0058				; Decrement (R7:R6)
-  3E1B C1B7  		AJMP L0062
+  3E1B C1B7  		AJMP L0062				; increment destination address
 
 L0535:
   3E1D B4FE07		CJNE A, #0FEh, L0538
@@ -8528,6 +8708,7 @@ L0536:
   3E40 C114  		AJMP L0537
 
 L0059:
+; looks like this does the memory address mapping for the "read flash" operation
   3E42 E583  		MOV A, DPH
   3E44 700C  		JNZ L0068
   3E46 E582  		MOV A, DPL
@@ -8575,40 +8756,56 @@ L0076:
   3E89 E4    		CLR A
 L0071:
   3E8A 93    		MOVC A, @A+DPTR
-  3E8B C1B7  		AJMP L0062
+  3E8B C1B7  		AJMP L0062			; increment destination address
 
+; ------------------------------------
+; Read a byte of code (with remap support)
 L0056:
-  3E8D B1A8  		ACALL L0058
-  3E8F 8C82  		MOV DPL, R4
-  3E91 8D83  		MOV DPH, R5
+READ_CODE_BYTE:
+  3E8D B1A8  		ACALL L0058			; DECREMENT_16BIT_R7_R6
+  3E8F 8C82  		MOV DPL, R4			; \ DPTR = (R5:R4) = destination address
+  3E91 8D83  		MOV DPH, R5			; /
   3E93 E512  		MOV A, 12h
-  3E95 B441AA		CJNE A, #41h, L0059
+  3E95 B441AA		CJNE A, #41h, L0059	; mem[0x12] == 'A' -> memory remapping disabled
 L0070:
   3E98 E583  		MOV A, DPH
   3E9A B44000		CJNE A, #40h, L0060
 L0060:
-  3E9D 5004  		JNC L0061
-  3E9F E4    		CLR A
-  3EA0 93    		MOVC A, @A+DPTR
-  3EA1 C1B7  		AJMP L0062
+  3E9D 5004  		JNC L0061			; if (dest address >= 0x4000) L0061
+  3E9F E4    		CLR A				;
+  3EA0 93    		MOVC A, @A+DPTR		; read code from DPTR
+  3EA1 C1B7  		AJMP L0062			; tail call to increment destination address
 
 L0061:
-  3EA3 B4FF02		CJNE A, #0FFh, L0065
+  3EA3 B4FF02		CJNE A, #0FFh, L0065	; looks like address 0xFFnn is mapped to xdata (which doesn't exist in this MCU)
   3EA6 C1B6  		AJMP L0066
 
 L0065:
   3EA8 B4FE05		CJNE A, #0FEh, L0067
-  3EAB A882  		MOV R0, DPL
+  3EAB A882  		MOV R0, DPL			; looks like 0xFEnn reads RAM address 0x00nn
 L0077:
   3EAD E6    		MOV A, @R0
-  3EAE C1B7  		AJMP L0062
+  3EAE C1B7  		AJMP L0062			; increment destination address
+
+
 
 L0067:
-  3EB0 B4FD04		CJNE A, #0FDh, L0062
-  3EB3 758300		MOV DPH, #0h
+  3EB0 B4FD04		CJNE A, #0FDh, L0062	; if (A != 0xFD), tail call to L0062 (increment destination address)
+  3EB3 758300		MOV DPH, #0h			; if (A == 0xFD) 
 L0066:
-  3EB6 E0    		MOVX A, @DPTR
+  3EB6 E0    		MOVX A, @DPTR			; wait, this MCU doesn't _have_ external memory.  That
+
+
+; ----------------------------------
+; Increment R5:R4 with two weird edge cases
+; - Increment R5:R4
+; - If we just went from 0xFCFF to 0xFD00, we go back to 0xFC00 (this makes sense, given the magic behind 0xFC00 for flash writes)
+; - If we just went from 0xFF00 to 0x0000, we go back to 0xFF00
+;
+; No matching fixup for 0xFEFF to 0xFF00, however.
+
 L0062:
+INCREMENT_FLASH_DESTINATION_ADDRESS:
   3EB7 0C    		INC R4
   3EB8 BC0009		CJNE R4, #0h, L0063
   3EBB 0D    		INC R5
@@ -8620,10 +8817,12 @@ L0064:
 L0063:
   3EC4 22    		RET
 
+; a strange delaying routine
+; it sleeps for roughly (0x1_00_00 + R1:R0) microseconds (slightly less, I think) and ends with R1:R0 zeroed
 L0111:
   3EC5 D1C7  		ACALL L0514
 L0514:
-  3EC7 D8FE  		DJNZ R0, L0514
+  3EC7 D8FE  		DJNZ R0, L0514			; assuming R=0, 213us delay
   3EC9 759355		MOV 93h, #55h            ; 93h = CLRWDT
   3ECC D9F9  		DJNZ R1, L0514
   3ECE 22    		RET
